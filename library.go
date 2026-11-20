@@ -67,7 +67,7 @@ func (a *App) LibraryStats() map[string]any {
 	stats["pending"] = pending
 	stats["uninstalled"] = uninstalled
 	stats["size"] = size
-	if free, err := download.DiskFree(a.layout.Downloads); err == nil {
+	if free, err := download.DiskFree(a.dl.Dir()); err == nil {
 		stats["diskFree"] = int64(free)
 	}
 	var lastCheck int64
@@ -443,17 +443,17 @@ func (a *App) CheckUpdates(force bool) ([]ledger.InstalledApp, error) {
 
 // ExportApp is the custom backup row. Field names follow the handbook.
 type ExportApp struct {
-	PackageName          string `json:"packageName"`
-	RepoOwner            string `json:"repoOwner"`
-	RepoName             string `json:"repoName"`
-	SourceHost           string `json:"sourceHost"`
-	AppName              string `json:"appName"`
+	PackageName           string `json:"packageName"`
+	RepoOwner             string `json:"repoOwner"`
+	RepoName              string `json:"repoName"`
+	SourceHost            string `json:"sourceHost"`
+	AppName               string `json:"appName"`
 	PreferredAssetVariant string `json:"preferredAssetVariant"`
-	AssetFilterRegex     string `json:"assetFilterRegex"`
-	IncludePreReleases   bool   `json:"includePreReleases"`
-	FallbackToOlder      bool   `json:"fallbackToOlderReleases"`
-	SkippedReleaseTag    string `json:"skippedReleaseTag"`
-	UpdateCheckEnabled   bool   `json:"updateCheckEnabled"`
+	AssetFilterRegex      string `json:"assetFilterRegex"`
+	IncludePreReleases    bool   `json:"includePreReleases"`
+	FallbackToOlder       bool   `json:"fallbackToOlderReleases"`
+	SkippedReleaseTag     string `json:"skippedReleaseTag"`
+	UpdateCheckEnabled    bool   `json:"updateCheckEnabled"`
 
 	InstalledVersion string `json:"installedVersion,omitempty"`
 	InstallDir       string `json:"installDir,omitempty"`
@@ -463,9 +463,9 @@ type ExportApp struct {
 
 // LibraryBundle is the JSON file shape.
 type LibraryBundle struct {
-	SchemaVersion int          `json:"schemaVersion"`
-	ExportedAt    time.Time    `json:"exportedAt"`
-	Apps          []ExportApp  `json:"apps"`
+	SchemaVersion int         `json:"schemaVersion"`
+	ExportedAt    time.Time   `json:"exportedAt"`
+	Apps          []ExportApp `json:"apps"`
 }
 
 // ImportPreview is one row of the dry-run.
@@ -575,9 +575,9 @@ func (a *App) ExportObtainiumFile() (string, error) {
 		}
 		if app.AssetFilter != "" || app.FallbackOlder || app.IncludePrerelease {
 			item.AdditionalSettings = map[string]any{
-				"apkFilterRegEx":         app.AssetFilter,
+				"apkFilterRegEx":          app.AssetFilter,
 				"fallbackToOlderReleases": app.FallbackOlder,
-				"includePrereleases":     app.IncludePrerelease,
+				"includePrereleases":      app.IncludePrerelease,
 			}
 		}
 		out = append(out, item)
@@ -648,17 +648,17 @@ func (a *App) ApplyImport() (ImportReport, error) {
 		}
 		app := ledger.InstalledApp{
 			ID: key, Owner: item.RepoOwner, Repo: item.RepoName,
-			DisplayName:      item.AppName,
-			SourceHost:       firstNonEmpty(item.SourceHost, "github.com"),
-			AppSlug:          "",
-			LibraryStatus:    "tracked",
+			DisplayName:        item.AppName,
+			SourceHost:         firstNonEmpty(item.SourceHost, "github.com"),
+			AppSlug:            "",
+			LibraryStatus:      "tracked",
 			UpdateCheckEnabled: item.UpdateCheckEnabled,
-			AssetFilter:      item.AssetFilterRegex,
-			IncludePrerelease: item.IncludePreReleases,
-			FallbackOlder:    item.FallbackToOlder,
-			PreferredVariant: item.PreferredAssetVariant,
-			SkippedReleaseTag: item.SkippedReleaseTag,
-			InstalledAt:      time.Now().Unix(),
+			AssetFilter:        item.AssetFilterRegex,
+			IncludePrerelease:  item.IncludePreReleases,
+			FallbackOlder:      item.FallbackToOlder,
+			PreferredVariant:   item.PreferredAssetVariant,
+			SkippedReleaseTag:  item.SkippedReleaseTag,
+			InstalledAt:        time.Now().Unix(),
 		}
 		if err := a.store.UpsertInstall(ctx, app); err != nil {
 			report.Invalid++
@@ -720,7 +720,7 @@ func parseLibrary(data []byte) ([]ExportApp, []ImportPreview, error) {
 		}
 		app := ExportApp{
 			PackageName: fmt.Sprint(item["id"]),
-			RepoOwner: ref.Owner, RepoName: ref.Name, SourceHost: ref.Host,
+			RepoOwner:   ref.Owner, RepoName: ref.Name, SourceHost: ref.Host,
 			AppName: name, FallbackToOlder: true, UpdateCheckEnabled: true,
 		}
 		if settings, ok := item["additionalSettings"].(map[string]any); ok {
@@ -792,14 +792,14 @@ func normalizeImport(apps []ExportApp) ([]ExportApp, []ImportPreview, error) {
 
 // ExternalApp is one row from "Apps & features" that Komi does not track.
 type ExternalApp struct {
-	Name          string `json:"name"`
-	Version       string `json:"version"`
-	Publisher     string `json:"publisher"`
-	InstallDir    string `json:"installDir"`
-	DisplayIcon   string `json:"displayIcon"`
-	ProductCode   string `json:"productCode"`
-	UninstallStr  string `json:"uninstallString"`
-	Size          int64  `json:"size"`
+	Name         string `json:"name"`
+	Version      string `json:"version"`
+	Publisher    string `json:"publisher"`
+	InstallDir   string `json:"installDir"`
+	DisplayIcon  string `json:"displayIcon"`
+	ProductCode  string `json:"productCode"`
+	UninstallStr string `json:"uninstallString"`
+	Size         int64  `json:"size"`
 }
 
 // ScanExternalApps enumerates the Uninstall registry, skipping entries already
@@ -890,7 +890,7 @@ func (a *App) TrackApp(host, owner, repo, name string) error {
 	}
 	app := ledger.InstalledApp{
 		ID: key, Owner: owner, Repo: repo, DisplayName: name,
-		SourceHost: firstNonEmpty(host, "github.com"),
+		SourceHost:    firstNonEmpty(host, "github.com"),
 		LibraryStatus: "tracked", UpdateCheckEnabled: true,
 		InstalledAt: time.Now().Unix(),
 	}
@@ -900,5 +900,3 @@ func (a *App) TrackApp(host, owner, repo, name string) error {
 	a.emit("ledger:changed", nil)
 	return nil
 }
-
-

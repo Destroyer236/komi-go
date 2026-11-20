@@ -24,6 +24,8 @@ export function CheckSelfUpdate():Promise<selfupdate.Info>;
 
 export function CheckUpdates(arg1:boolean):Promise<Array<ledger.InstalledApp>>;
 
+export function ChooseDownloadDir():Promise<string>;
+
 export function ClearCache(arg1:string):Promise<number>;
 
 export function ClearFinishedDownloads():Promise<number>;
@@ -123,6 +125,8 @@ export function SelectAsset(arg1:string,arg2:string,arg3:string,arg4:string,arg5
 export function SetAppPreferences(arg1:string,arg2:string,arg3:boolean,arg4:boolean):Promise<void>;
 
 export function SetAutostart(arg1:boolean):Promise<void>;
+
+export function SetDownloadDir(arg1:string):Promise<void>;
 
 export function SetPinned(arg1:string,arg2:boolean):Promise<void>;
 

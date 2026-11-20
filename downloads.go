@@ -174,7 +174,7 @@ func (a *App) ClearFinishedDownloads() (int, error) {
 
 // OpenDownloads opens the download folder in Explorer.
 func (a *App) OpenDownloads() error {
-	return platform.OpenFolder(a.layout.Downloads)
+	return platform.OpenFolder(a.dl.Dir())
 }
 
 // RevealDownload selects the file in Explorer.
@@ -193,14 +193,14 @@ func (a *App) RevealDownload(id string) error {
 
 // DiskSpace reports free/used space around the download folder.
 func (a *App) DiskSpace() map[string]any {
-	free, err := download.DiskFree(a.layout.Downloads)
+	free, err := download.DiskFree(a.dl.Dir())
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
 	return map[string]any{
 		"free":  int64(free),
 		"total": int64(0),
-		"dir":   a.layout.Downloads,
+		"dir":   a.dl.Dir(),
 	}
 }
 

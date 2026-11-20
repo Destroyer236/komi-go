@@ -34,6 +34,10 @@ export function CheckUpdates(arg1) {
   return window['go']['main']['App']['CheckUpdates'](arg1);
 }
 
+export function ChooseDownloadDir() {
+  return window['go']['main']['App']['ChooseDownloadDir']();
+}
+
 export function ClearCache(arg1) {
   return window['go']['main']['App']['ClearCache'](arg1);
 }
@@ -232,6 +236,10 @@ export function SetAppPreferences(arg1, arg2, arg3, arg4) {
 
 export function SetAutostart(arg1) {
   return window['go']['main']['App']['SetAutostart'](arg1);
+}
+
+export function SetDownloadDir(arg1) {
+  return window['go']['main']['App']['SetDownloadDir'](arg1);
 }
 
 export function SetPinned(arg1, arg2) {

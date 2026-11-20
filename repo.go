@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"komi-go/internal/catalog"
 	"komi-go/internal/github"
@@ -67,8 +69,7 @@ func (a *App) SearchPage(query string, page int, sort string, language string, p
 	defer cancel()
 
 	var merged []catalog.RepoInfo
-	var total int
-	var backendErr error
+	var backendOK bool
 	if raw != "" && a.backend != nil && sort != "forks" {
 		backendSort := sort
 		switch sort {
@@ -81,51 +82,176 @@ func (a *App) SearchPage(query string, page int, sort string, language string, p
 		case "updated":
 			backendSort = "updated"
 		}
-		repos, hits, _, err := a.backend.Search(ctx, raw, page, searchPageSize, backendSort, platform, false)
+		repos, _, _, err := a.backend.Search(ctx, raw, page, searchPageSize, backendSort, platform, false)
 		if err != nil {
-			backendErr = err
 			log.Printf("search backend err=%v page=%d platform=%q", err, page, platform)
 			if !github.BackendShouldFallback(err) {
 				return SearchPage{}, errors.New(friendly(err))
 			}
 		} else {
+			backendOK = true
 			merged = append(merged, repos...)
-			total = hits
 		}
 	}
 
-	// GitHub's own search knows about forks and freshly pushed derivative builds
-	// that the aggregation index has not crawled yet. Merge it for completeness.
-	if raw != "" && language == "" {
+	// GitHub search has broader recall (forks, fresh releases) but its token
+	// match can also be loose. Results from both sources go through the same
+	// local fuzzy filter, so uppercase/lowercase and partial names both work
+	// without dragging in every app containing one Chinese character.
+	if raw != "" {
 		repos, err := a.searchDirect(ctx, raw, page, sort, language, false)
 		if err == nil {
 			a.fillMissingPlatforms(ctx, repos)
 			merged = mergeRepos(merged, repos)
-			if len(merged) > total {
-				total = len(merged)
-			}
-		} else if backendErr != nil {
+		} else if !backendOK {
 			return SearchPage{}, err
 		}
 	}
-
-	if len(merged) == 0 && backendErr == nil {
+	if raw == "" {
 		return SearchPage{}, nil
 	}
-	// Source-only repositories are not apps: never show them.
-	out := merged[:0]
-	for _, r := range merged {
-		if len(r.Platforms) == 0 {
+	merged = filterSearchResults(merged, platform, raw, sort)
+	total := len(merged)
+	hasMore := len(merged) >= searchPageSize
+	return SearchPage{Items: merged, Total: total, Page: page, PageSize: searchPageSize, HasMore: hasMore}, nil
+}
+
+// searchScore ranks a repository for a plain, case-insensitive query.
+// Every whitespace-separated token must appear in the name/description;
+// this is fuzzy on prefixes and one-character English typos, but never on
+// single CJK characters.
+func searchScore(r catalog.RepoInfo, query string) int {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return 0
+	}
+	name := strings.ToLower(r.FullName + " " + r.Name)
+	desc := strings.ToLower(r.Description)
+	hay := name + " " + desc
+	tokens := strings.Fields(q)
+	for _, t := range tokens {
+		if !searchTokenPresent(t, hay) {
+			return 0
+		}
+	}
+	score := 100
+	if name == q {
+		score += 700
+	} else if strings.Contains(name, q) {
+		score += 500
+	} else if strings.Contains(desc, q) {
+		score += 300
+	}
+	for _, t := range tokens {
+		if strings.Contains(name, t) {
+			score += 20
+		}
+	}
+	return score
+}
+
+func searchTokenPresent(token, hay string) bool {
+	if token == "" {
+		return true
+	}
+	if strings.Contains(hay, token) {
+		return true
+	}
+	runes := []rune(token)
+	if len(runes) < 3 || !isASCIIString(token) {
+		return false
+	}
+	for _, word := range strings.FieldsFunc(hay, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}) {
+		if strings.HasPrefix(word, token) {
+			return true
+		}
+		if len(runes) >= 4 && absInt(len([]rune(word))-len(runes)) <= 1 && withinOneEdit(token, word) {
+			return true
+		}
+	}
+	return false
+}
+
+func isASCIIString(s string) bool {
+	for _, r := range s {
+		if r > unicode.MaxASCII {
+			return false
+		}
+	}
+	return true
+}
+
+func absInt(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
+}
+
+func withinOneEdit(a, b string) bool {
+	ra, rb := []rune(a), []rune(b)
+	if absInt(len(ra)-len(rb)) > 1 {
+		return false
+	}
+	// Simple bounded edit distance: one substitution/insert/delete.
+	i, j, edits := 0, 0, 0
+	for i < len(ra) && j < len(rb) {
+		if ra[i] == rb[j] {
+			i++
+			j++
 			continue
+		}
+		edits++
+		if edits > 1 {
+			return false
+		}
+		if len(ra) > len(rb) {
+			i++
+		} else if len(ra) < len(rb) {
+			j++
+		} else {
+			i++
+			j++
+		}
+	}
+	if i < len(ra) || j < len(rb) {
+		edits++
+	}
+	return edits <= 1
+}
+
+func filterSearchResults(items []catalog.RepoInfo, platform, query, sortMode string) []catalog.RepoInfo {
+	scored := make([]catalog.RepoInfo, 0, len(items))
+	scores := make(map[string]int, len(items))
+	for _, r := range items {
+		if len(r.Platforms) == 0 {
+			continue // source-only repositories are not apps
 		}
 		if platform != "" && !hasPlatform(r, platform) {
 			continue
 		}
-		out = append(out, r)
+		score := searchScore(r, query)
+		if score == 0 {
+			continue
+		}
+		scores[strings.ToLower(r.FullName)] = score
+		scored = append(scored, r)
 	}
-	merged = out
-	hasMore := page*searchPageSize < total || (total == 0 && len(merged) >= searchPageSize)
-	return SearchPage{Items: merged, Total: total, Page: page, PageSize: searchPageSize, HasMore: hasMore}, nil
+	switch sortMode {
+	case "", "best":
+		sort.SliceStable(scored, func(i, j int) bool {
+			si, sj := scores[strings.ToLower(scored[i].FullName)], scores[strings.ToLower(scored[j].FullName)]
+			if si != sj {
+				return si > sj
+			}
+			return scored[i].Stars > scored[j].Stars
+		})
+	case "stars":
+		sort.SliceStable(scored, func(i, j int) bool { return scored[i].Stars > scored[j].Stars })
+	}
+	return scored
 }
 
 func hasPlatform(r catalog.RepoInfo, p string) bool {
@@ -187,7 +313,7 @@ func (a *App) fillMissingPlatforms(ctx context.Context, repos []catalog.RepoInfo
 	if len(targets) == 0 {
 		return
 	}
-	sem := make(chan struct{}, 5)
+	sem := make(chan struct{}, 8)
 	var wg sync.WaitGroup
 	for _, i := range targets {
 		i := i
@@ -196,7 +322,7 @@ func (a *App) fillMissingPlatforms(ctx context.Context, repos []catalog.RepoInfo
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			cctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+			cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 			defer cancel()
 			repos[i].Platforms = a.platformsFor(cctx, repos[i].Owner, repos[i].Name)
 			if len(repos[i].Platforms) == 0 {

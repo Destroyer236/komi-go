@@ -24,6 +24,7 @@ const S = {
   contributionsError: '',
   settings: {},
   settingsScreen: 'hub',
+  settingsSection: 'appearance',
   installs: [],
   downloads: [],
   stats: {},
@@ -43,8 +44,13 @@ const S = {
     categoryCatalog: [], categoryLoading: false, categoryError: '',
   },
   onboarding: { needs: false, step: 0, theme: 'system', auto: true, tray: true, autostart: false },
+  accent: '',
   busy: 0,
 };
+
+// Upstream keeps one browse platform shared by Home and Search, defaulting to
+// the host OS. Mirror that instead of opening search on "all platforms".
+S.discover.platform = localPlatform();
 
 let toastSeq = 0;
 let modalOpen = false;
@@ -180,11 +186,9 @@ function icon(name, cls = '') {
 
 function wavy(pct, cls = '') {
   const p = clamp(Number(pct || 0), 0, 100);
-  const d = 'M0 6 Q 5 0 10 6 T 20 6 T 30 6 T 40 6 T 50 6 T 60 6 T 70 6 T 80 6 T 90 6 T 100 6';
-  return `<svg class="wavy" viewBox="0 0 100 12" preserveAspectRatio="none" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(p)}">
-    <path class="wavy-track" d="${d}" pathLength="100"/>
-    <path class="wavy-fill ${cls}" d="${d}" pathLength="100" stroke-dasharray="${p} 100"/>
-  </svg>`;
+  return `<div class="linear-progress ${cls}" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(p)}">
+    <span style="width:${p}%"></span>
+  </div>`;
 }
 
 function toast(msg, kind = '') {
@@ -207,6 +211,7 @@ function setTheme(mode) {
     : mode;
   document.documentElement.dataset.theme = resolved;
   document.documentElement.dataset.themePreference = mode;
+  applyAccent();
   if (mode === 'system' && window.__themeMediaBound !== true) {
     window.__themeMediaBound = true;
     if (window.matchMedia) {
@@ -215,6 +220,108 @@ function setTheme(mode) {
       });
     }
   }
+}
+
+const ACCENT_KEYS = [
+  '--primary', '--on-primary', '--primary-container', '--on-primary-container',
+  '--secondary', '--on-secondary', '--secondary-container', '--on-secondary-container',
+  '--tertiary', '--on-tertiary', '--tertiary-container', '--on-tertiary-container',
+  '--surface', '--surface-dim', '--surface-bright', '--surface-lowest', '--surface-low',
+  '--surface-container-low', '--surface-container', '--surface-high', '--surface-highest',
+  '--on-surface', '--on-surface-variant', '--outline', '--outline-variant',
+  '--inverse-surface', '--inverse-on-surface', '--scrim',
+];
+
+function parseAccent(rgb) {
+  return rgb.replace('#', '').match(/[0-9a-f]{2}/gi).map((v) => parseInt(v, 16));
+}
+
+function rgbToHsl(rgb) {
+  const [r, g, b] = rgb.map((v) => v / 255);
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  if (max === min) return [0, 0, l * 100];
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h = max === r ? (g - b) / d + (g < b ? 6 : 0) : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return [h * 60, s * 100, l * 100];
+}
+
+function hslToRgb(h, s, l) {
+  h = ((h % 360) + 360) % 360 / 360;
+  s /= 100;
+  l /= 100;
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  const f = (t) => {
+    t = (t + 1) % 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 1 / 2) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    return p;
+  };
+  return [f(h + 1 / 3), f(h), f(h - 1 / 3)].map((v) => Math.round(v * 255));
+}
+
+function accentLuminance(rgb) {
+  const c = rgb.map((v) => {
+    const s = v / 255;
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+}
+
+function accentHex(rgb) {
+  return '#' + rgb.map((v) => v.toString(16).padStart(2, '0')).join('');
+}
+
+function applyAccent() {
+  const root = document.documentElement;
+  const raw = String(S.accent || S.settings['ui.accent'] || '');
+  if (!/^#[0-9a-f]{6}$/i.test(raw)) {
+    ACCENT_KEYS.forEach((k) => root.style.removeProperty(k));
+    return;
+  }
+  const [rawHue, rawSat] = rgbToHsl(parseAccent(raw));
+  const hue = rawHue;
+  const sat = Math.max(24, rawSat);
+  const dark = root.dataset.theme === 'dark';
+  const hsl = (h, s, l) => `hsl(${Math.round(((h % 360) + 360) % 360)} ${Math.round(Math.max(0, Math.min(100, s)))}% ${Math.round(Math.max(0, Math.min(100, l)))}%)`;
+  const tint = Math.min(28, Math.max(16, sat * 0.3));
+  const primaryL = dark ? 72 : Math.max(28, Math.min(56, rgbToHsl(parseAccent(raw))[2]));
+  const primary = hslToRgb(hue, Math.min(82, sat), primaryL);
+  const onPrimary = accentLuminance(primary) > 0.45 ? hsl(hue, sat, 10) : '#ffffff';
+  const set = (k, v) => root.style.setProperty(k, v);
+
+  set('--primary', hsl(hue, sat, primaryL));
+  set('--on-primary', onPrimary);
+  set('--primary-container', hsl(hue, sat, dark ? 20 : 88));
+  set('--on-primary-container', hsl(hue, sat, dark ? 88 : 16));
+  set('--secondary', hsl(hue, sat * 0.22, dark ? 78 : 36));
+  set('--on-secondary', hsl(hue, sat * 0.2, dark ? 16 : 98));
+  set('--secondary-container', hsl(hue, sat * 0.45, dark ? 26 : 88));
+  set('--on-secondary-container', hsl(hue, sat * 0.4, dark ? 88 : 14));
+  set('--tertiary', hsl(hue + 42, sat * 0.35, dark ? 74 : 35));
+  set('--on-tertiary', hsl(hue + 42, sat * 0.3, dark ? 12 : 98));
+  set('--tertiary-container', hsl(hue + 42, sat * 0.45, dark ? 24 : 86));
+  set('--on-tertiary-container', hsl(hue + 42, sat * 0.4, dark ? 88 : 14));
+  set('--surface', hsl(hue, tint, dark ? 9 : 97));
+  set('--surface-dim', hsl(hue, tint, dark ? 8 : 84));
+  set('--surface-bright', hsl(hue, tint, dark ? 26 : 98));
+  set('--surface-lowest', hsl(hue, tint, dark ? 11 : 100));
+  set('--surface-low', hsl(hue, tint, dark ? 12 : 95));
+  set('--surface-container-low', hsl(hue, tint, dark ? 12 : 95));
+  set('--surface-container', hsl(hue, tint, dark ? 15 : 93));
+  set('--surface-high', hsl(hue, tint, dark ? 19 : 91));
+  set('--surface-highest', hsl(hue, tint, dark ? 24 : 88));
+  set('--on-surface', hsl(hue, tint, dark ? 90 : 11));
+  set('--on-surface-variant', hsl(hue, tint, dark ? 74 : 28));
+  set('--outline', hsl(hue, tint * 0.7, dark ? 55 : 50));
+  set('--outline-variant', hsl(hue, tint * 0.8, dark ? 28 : 80));
+  set('--inverse-surface', hsl(hue, tint, dark ? 90 : 15));
+  set('--inverse-on-surface', hsl(hue, tint, dark ? 18 : 94));
+  set('--scrim', dark ? 'rgba(0, 0, 0, 0.62)' : `rgba(${hslToRgb(hue, tint, 8).join(', ')}, 0.42)`);
 }
 
 function applyMotion() {
@@ -448,6 +555,7 @@ async function loadAuth() {
 
 async function loadSettings() {
   try { S.settings = (await call('GetSettings')) || {}; } catch (e) { console.error(e); }
+  S.accent = String(S.settings['ui.accent'] || '');
   applyMotion();
   setTheme(S.settings.theme || 'system');
 }
@@ -746,9 +854,15 @@ async function onSearchSubmit(e) {
   if (e) e.preventDefault();
   const input = $('#searchInput');
   const q = (input ? input.value : S.discover.query).trim();
+  if (q && Array.from(q).length < 2) {
+    toast('搜索词至少需要 2 个字符', 'warn');
+    return;
+  }
   S.discover.query = q;
   S.discover.page = 1;
   if (q) searchHistoryPush(q);
+  const main = $('#main');
+  if (main) main.scrollTop = 0;
   render(); // rebuild with search mode and current query
   await loadDiscover();
 }
@@ -1156,6 +1270,7 @@ function renderDownloads() {
     <div class="page-head">
       <div><h1>下载</h1><div class="sub">断点续传、镜像测速与自动优选、磁盘预检；校验失败的标记不会被隐藏。</div></div>
       <div class="page-actions">
+        <button class="btn outlined small" data-action="choose-download-dir" data-tip="更改新任务的保存位置">${icon('folder', 'sm')} 更改目录</button>
         <button class="btn outlined small" data-action="open-downloads">${icon('folder', 'sm')} 下载目录</button>
         <button class="btn text small" data-action="clear-downloads">${icon('trash', 'sm')} 清理记录</button>
       </div>
@@ -1165,7 +1280,7 @@ function renderDownloads() {
     <div class="section-title"><h2>已完成</h2><span class="badge outline">${finished.length}</span></div>
     ${finished.length ? `<div>${finished.map(downloadRow).join('')}</div>` : `<div class="note">下载完成后可以直接“安装”，安装器会请求 Windows 自己的权限确认。</div>`}
     <div class="spread" style="margin-top:16px">
-      <span class="tiny muted">磁盘可用：${fmtBytes((S.stats && S.stats.diskFree) || 0)}</span>
+      <span class="tiny muted">目录：${esc((S.auth && S.auth.downloadsDir) || '默认下载目录')} · 磁盘可用：${fmtBytes((S.stats && S.stats.diskFree) || 0)}</span>
       <span class="tiny muted">校验：只有 Release 提供 SHA-256 时才会标记“已校验”</span>
     </div>`;
   main.scrollTop = scroll;
@@ -1230,7 +1345,7 @@ function settingsProfile(a) {
       </button>
       <div class="profile-actions">
         ${signed
-          ? `<button class="btn outlined small" data-action="logout">退出登录</button><button class="btn text small" data-action="login-device">切换账号</button>`
+          ? `<button class="btn outlined small" data-action="logout">退出登录</button>`
           : `<button class="btn filled small" data-action="login">登录 GitHub</button>`}
       </div>
     </div>
@@ -1269,7 +1384,7 @@ function renderSettingsHub() {
       insetRow({ action: 'announcements', iconName: 'inbox', title: '公告', desc: '资讯、调查和重要通知' }),
     '版本与公告')}
     ${settingsGroup('应用',
-      insetRow({ action: 'settings-general', iconName: 'settings', title: '调整', desc: '应用设置、主题、网络、高级选项' }) +
+      insetRow({ action: 'settings-general', iconName: 'settings', title: '调整', desc: '外观、更新、连接、桌面、数据与诊断' }) +
       insetRow({ action: 'about-app', iconName: 'info', title: '关于', desc: '版本、社区、法律与数据目录' }),
     '个性化 Komi Go')}
     ${settingsGroup('账户',
@@ -1417,20 +1532,88 @@ function renderSettingsProfile() {
   </div>`;
 }
 
-function renderSettingsGeneral() {
+const SETTINGS_SECTIONS = [
+  { id: 'appearance', title: '外观与显示', desc: '主题、减少动效与界面观感', iconName: 'settings' },
+  { id: 'updates', title: '安装与更新', desc: '自动检查、预发布、资产过滤与应用自身升级', iconName: 'refresh' },
+  { id: 'network', title: '连接', desc: '代理、镜像与下载加速', iconName: 'external' },
+  { id: 'desktop', title: '桌面集成', desc: '托盘、开机启动与 komi:// 协议', iconName: 'power' },
+  { id: 'data', title: '隐私与数据', desc: '缓存、库备份与本地应用扫描', iconName: 'shield' },
+  { id: 'about', title: '关于与诊断', desc: '版本、日志与数据目录', iconName: 'info' },
+];
+
+function settingsSection(id) {
+  return SETTINGS_SECTIONS.find((s) => s.id === id) || SETTINGS_SECTIONS[0];
+}
+
+function settingsSectionSummary(id) {
   const a = S.auth || {};
   const theme = S.settings.theme || 'system';
+  const themeLabel = { system: '跟随系统', light: '浅色', dark: '深色' }[theme] || '跟随系统';
+  if (id === 'appearance') return `主题：${themeLabel} · 主色：${S.settings['ui.accent'] ? '自定义' : '默认'} · 减少动效：${S.settings['ui.reduce_motion'] === 'true' ? '开启' : '关闭'}`;
+  if (id === 'updates') return `自动检查：${S.settings['update.auto'] === 'true' ? '开启' : '关闭'} · 间隔 ${esc(S.settings['update.interval'] || '12')} 小时`;
+  if (id === 'network') {
+    const mode = S.settings['network.mirrorSelected'] || 'auto';
+    const mirror = mode === 'auto' ? '自动' : mode === 'direct' ? '直连' : (mirrorConfig().find((m) => m.template === mode)?.name || '自定义');
+    return `代理：${S.settings['network.proxy'] ? '已配置' : '未设置'} · 镜像：${mirror}`;
+  }
+  if (id === 'desktop') return `关闭到托盘：${S.settings['ui.close_to_tray'] === 'true' ? '开启' : '关闭'} · 开机启动：${a.autostart ? '开启' : '关闭'}`;
+  if (id === 'data') return `缓存 ${Number(S.cache.entries || 0)} 条 · ${fmtBytes(S.cache.bytes || 0)}`;
+  return `Komi Go ${esc(a.version || '')} · 日志与数据目录`;
+}
+
+function renderSettingsGeneral() {
   return `<div class="settings-page">
     <div class="settings-header with-back">
-      <button class="icon-btn" data-action="settings-hub" aria-label="返回">${icon('back')}</button>
-      <div><h1>调整</h1><div class="sub">应用设置、主题、网络、翻译、高级选项。</div></div>
+      <button class="icon-btn" data-action="settings-hub" aria-label="返回设置">${icon('back')}</button>
+      <div><h1>调整</h1><div class="sub">先选择板块，进入后再修改具体设置。</div></div>
     </div>
-    ${settingsGroup('外观',
+    <section class="settings-group">
+      <div class="settings-group-head"><h2>设置分类</h2><p>外观、更新、连接、桌面、数据与诊断</p></div>
+      <div class="settings-category-grid">
+        ${SETTINGS_SECTIONS.map((s) => `<button class="settings-category" data-action="settings-section" data-section="${s.id}">
+          <span class="settings-category-icon">${icon(s.iconName)}</span>
+          <span class="settings-category-text"><strong>${s.title}</strong><small>${settingsSectionSummary(s.id)}</small></span>
+          <span class="inset-chevron">${icon('back')}</span>
+        </button>`).join('')}
+      </div>
+    </section>
+  </div>`;
+}
+
+function renderSettingsSection(id) {
+  const section = settingsSection(id);
+  return `<div class="settings-page">
+    <div class="settings-header with-back">
+      <button class="icon-btn" data-action="settings-general" aria-label="返回调整">${icon('back')}</button>
+      <div><h1>${section.title}</h1><div class="sub">${section.desc}</div></div>
+    </div>
+    ${settingsSectionContent(section.id)}
+  </div>`;
+}
+
+function settingsSectionContent(id) {
+  const a = S.auth || {};
+  const theme = S.settings.theme || 'system';
+  const accent = String(S.settings['ui.accent'] || '');
+  if (id === 'appearance') {
+    const accentPresets = ['#006e2c', '#0061a4', '#6750a4', '#b3261e', '#825500', '#006a6a'];
+    return settingsGroup('外观与显示',
       settingRow('settings', '主题', '跟随系统、浅色或深色；切换立即生效。',
         `<div class="tab-group">${['system', 'light', 'dark'].map((t) => `<button class="tab" aria-selected="${theme === t}" data-action="theme" data-theme="${t}">${{ system: '跟随系统', light: '浅色', dark: '深色' }[t]}</button>`).join('')}</div>`) +
+      settingRow('palette', '主题色', accent ? `当前 ${accent.toUpperCase()}，界面背景、按钮与选中态均已同步。` : '自定义后，界面背景、按钮、选中态与进度条都会同步换色。',
+        `<div class="accent-control">
+          ${accentPresets.map((c) => `<button class="accent-dot${accent.toLowerCase() === c ? ' selected' : ''}" style="--dot:${c}" data-action="accent-color" data-accent="${c}" title="${c}" aria-label="使用主题色 ${c}"></button>`).join('')}
+          <label class="accent-custom" title="自定义颜色">
+            <input type="color" id="accentColor" value="${esc(accent || '#006e2c')}" aria-label="自定义主题色">
+            <span id="accentValue">${accent ? esc(accent.toUpperCase()) : '自定义'}</span>
+          </label>
+          ${accent ? '<button class="btn text small accent-reset" data-action="accent-reset">恢复默认</button>' : ''}
+        </div>`) +
       settingSwitch('ui.reduce_motion', '减少动效', '关闭按压形变、波浪进度与过渡动画。', 'play'),
-    '决定 Komi Go 的观感与动效')}
-    ${settingsGroup('更新',
+    '决定 Komi Go 的观感与动效');
+  }
+  if (id === 'updates') {
+    return settingsGroup('安装与更新',
       settingSwitch('update.auto', '自动检查更新', '应用启动后按间隔在后台检查，不自动安装。', 'refresh') +
       settingRow('refresh', '检查间隔', '1–168 小时。默认 12 小时。',
         `<input class="input" type="number" min="1" max="168" style="width:96px" data-setting="update.interval" value="${esc(S.settings['update.interval'] || '12')}"><span class="muted small">小时</span>`) +
@@ -1442,37 +1625,45 @@ function renderSettingsGeneral() {
         `<input class="input" data-setting="self_update.repo" value="${esc(S.settings['self_update.repo'] || '')}" placeholder="owner/repo">`) +
       settingRow('refresh', '应用更新', S.selfInfo && S.selfInfo.available ? `发现新版本 ${esc(S.selfInfo.latest || '')}` : '检查并下载 Komi Go 的新版本。',
         `<button class="btn tonal small" data-action="check-self-update">${icon('refresh', 'sm')} 检查</button><button class="btn outlined small" data-action="download-self-update" ${S.selfInfo && S.selfInfo.available ? '' : 'disabled'}>安装</button>`),
-    'Release 检查与应用自身升级')}
-    ${settingsGroup('网络',
+    'Release 检查与应用自身升级');
+  }
+  if (id === 'network') {
+    return settingsGroup('连接',
       settingRow('external', '代理', '支持 http/https 代理；留空跟随系统。',
         `<input class="input" id="proxyInput" value="${esc(S.settings['network.proxy'] || '')}" placeholder="http://127.0.0.1:7890">`) +
       settingRow('external', '代理操作', '保存后立即应用到后续请求。',
         `<button class="btn outlined small" data-action="save-proxy">保存代理</button><button class="btn text small" data-action="ping">测试连接</button>`) +
       settingRow('download', '镜像模式', '自动会在下载前测速并优先延迟最低的镜像。', mirrorModeControl()) +
       mirrorPanel(),
-    '下载加速与连接方式')}
-    ${settingsGroup('桌面集成',
+    '下载加速与连接方式');
+  }
+  if (id === 'desktop') {
+    return settingsGroup('桌面集成',
       settingSwitch('ui.close_to_tray', '关闭到托盘', '点击关闭按钮时隐藏到托盘，而不是退出。', 'power') +
       settingRow('power', '开机启动', '写入 HKCU Run，启动时隐藏到托盘。',
         `<label class="switch"><input type="checkbox" id="autostartSwitch" ${a.autostart ? 'checked' : ''}><span class="track"></span></label>`) +
       settingRow('external', 'komi:// 协议', '双击链接或从浏览器直接打开仓库页。',
         `<span class="badge ${a.urlScheme ? 'success' : 'outline'}">${a.urlScheme ? '已注册' : '未注册'}</span><button class="btn outlined small" data-action="register-scheme">注册</button>`),
-    '托盘、启动项与系统链接')}
-    ${settingsGroup('数据',
+    '托盘、启动项与系统链接');
+  }
+  if (id === 'data') {
+    return settingsGroup('隐私与数据',
+      settingRow('folder', '下载目录', esc(a.downloadsDir || '默认下载目录'),
+        `<button class="btn outlined small" data-action="choose-download-dir">更改</button><button class="icon-btn" data-action="open-downloads" data-tip="打开下载目录" aria-label="打开下载目录">${icon('folder')}</button>`) +
       settingRow('inbox', 'HTTP 缓存', `${Number(S.cache.entries || 0)} 条 · ${fmtBytes(S.cache.bytes || 0)}；数据库 ${fmtBytes(S.cache.dbBytes || 0)}`,
         `<button class="btn outlined small" data-action="clear-cache">清空缓存</button>`) +
       settingRow('copy', '库备份', '导出 Komi 备份或 Obtainium 兼容列表；导入只建立跟踪，不自动安装。',
         `<button class="btn outlined small" data-action="export-library">导出</button><button class="btn outlined small" data-action="export-obtainium">Obtainium</button><button class="btn tonal small" data-action="import-library">导入</button>`) +
       settingRow('apps', '系统应用扫描', '读取“应用和功能”，尝试反查 GitHub 来源仓库。',
         `<button class="btn outlined small" data-action="scan-external">扫描</button>`),
-    '缓存、备份与本地应用')}
-    ${settingsGroup('关于',
-      settingRow('info', `Komi Go ${esc(a.version || '')}`, 'Go + Wails v2 + SQLite + WebView2 · Material 3 Expressive',
-        `<button class="btn text small" data-action="copy-diagnostics">复制诊断</button><button class="btn text small" data-action="open-logs">日志</button>`) +
-      settingRow('folder', '数据目录', `<span class="mono" style="font-size:11px">${esc(a.dataDir || '')}</span>`,
-        `<button class="icon-btn" data-action="open-data" data-tip="打开数据目录" aria-label="打开数据目录">${icon('folder')}</button>`),
-    '版本与本地数据')}
-  </div>`;
+    '缓存、备份与本地应用');
+  }
+  return settingsGroup('关于与诊断',
+    settingRow('info', `Komi Go ${esc(a.version || '')}`, 'Go + Wails v2 + SQLite + WebView2 · Material 3 Expressive',
+      `<button class="btn text small" data-action="copy-diagnostics">复制诊断</button><button class="btn text small" data-action="open-logs">日志</button>`) +
+    settingRow('folder', '数据目录', `<span class="mono" style="font-size:11px">${esc(a.dataDir || '')}</span>`,
+      `<button class="icon-btn" data-action="open-data" data-tip="打开数据目录" aria-label="打开数据目录">${icon('folder')}</button>`),
+  '版本与本地数据');
 }
 
 function mirrorConfig() {
@@ -1535,9 +1726,11 @@ function renderSettings() {
   const scroll = main.scrollTop;
   main.innerHTML = S.settingsScreen === 'general'
     ? renderSettingsGeneral()
-    : S.settingsScreen === 'profile'
-      ? renderSettingsProfile()
-      : renderSettingsHub();
+    : S.settingsScreen === 'section'
+      ? renderSettingsSection(S.settingsSection)
+      : S.settingsScreen === 'profile'
+        ? renderSettingsProfile()
+        : renderSettingsHub();
   main.scrollTop = scroll;
   const search = $('#profileSearch');
   if (search) search.addEventListener('input', (e) => {
@@ -1549,6 +1742,27 @@ function renderSettings() {
     try { await call('SetAutostart', auto.checked); S.auth.autostart = auto.checked; toast(auto.checked ? '已开启开机启动' : '已关闭开机启动', 'success'); }
     catch (e) { notifyError(e); auto.checked = !auto.checked; }
   });
+  const accent = $('#accentColor');
+  if (accent) {
+    const preview = () => {
+      S.settings['ui.accent'] = accent.value;
+      S.accent = accent.value;
+      applyAccent();
+      const label = $('#accentValue');
+      if (label) label.textContent = accent.value.toUpperCase();
+    };
+    accent.addEventListener('input', preview);
+    accent.addEventListener('change', async () => {
+      try {
+        await call('SetSetting', 'ui.accent', accent.value);
+        S.settings['ui.accent'] = accent.value;
+        S.accent = accent.value;
+        applyAccent();
+        renderSettings();
+        toast('主题色已更新', 'success');
+      } catch (e) { notifyError(e); }
+    });
+  }
 }
 
 async function loadSettingsPage() {
@@ -2024,6 +2238,8 @@ async function onGlobalClick(e) {
       case 'history-search': {
         S.discover.query = el.dataset.q || '';
         S.discover.page = 1;
+        const main = $('#main');
+        if (main) main.scrollTop = 0;
         render();
         await loadDiscover();
         break;
@@ -2042,7 +2258,14 @@ async function onGlobalClick(e) {
         if (p > 0) { S.discover.page = p; loadDiscover(); }
         break;
       }
-      case 'platform': S.discover.platform = el.dataset.platform || 'all'; S.discover.page = 1; loadDiscover(); break;
+      case 'platform': {
+        S.discover.platform = el.dataset.platform || 'all';
+        S.discover.page = 1;
+        const main = $('#main');
+        if (main) main.scrollTop = 0;
+        loadDiscover();
+        break;
+      }
       case 'open-repo': await openRepo(el.dataset.host, el.dataset.owner, el.dataset.repo); break;
       case 'back-discover': S.route = 'discover'; render(); break;
       case 'refresh-repo': if (S.view) await openRepo(hostOf(S.view), S.view.owner, S.view.name, true); break;
@@ -2157,6 +2380,16 @@ async function onGlobalClick(e) {
       case 'open-data': await call('OpenFolder', 'data'); break;
       case 'open-logs': await call('OpenFolder', 'logs'); break;
       case 'open-downloads': await call('OpenDownloads'); break;
+      case 'choose-download-dir': {
+        const dir = await call('ChooseDownloadDir');
+        if (!dir) break;
+        S.auth = S.auth || {};
+        S.auth.downloadsDir = dir;
+        toast('下载目录已更新', 'success');
+        if (S.route === 'downloads') renderDownloads();
+        if (S.route === 'settings') renderSettings();
+        break;
+      }
       case 'reveal-download': await call('RevealDownload', el.dataset.id); break;
       case 'pause-download': await call('PauseDownload', el.dataset.id); await loadDownloads(); render(); break;
       case 'resume-download': await call('ResumeDownload', el.dataset.id); await loadDownloads(); render(); break;
@@ -2179,6 +2412,26 @@ async function onGlobalClick(e) {
         await call('SetSetting', 'theme', mode);
         S.settings.theme = mode; setTheme(mode);
         if (S.route === 'settings') renderSettings();
+        break;
+      }
+      case 'accent-color': {
+        const color = String(el.dataset.accent || '').toLowerCase();
+        if (!/^#[0-9a-f]{6}$/.test(color)) break;
+        await call('SetSetting', 'ui.accent', color);
+        S.settings['ui.accent'] = color;
+        S.accent = color;
+        applyAccent();
+        renderSettings();
+        toast('主题色已更新', 'success');
+        break;
+      }
+      case 'accent-reset': {
+        await call('SetSetting', 'ui.accent', '');
+        S.settings['ui.accent'] = '';
+        S.accent = '';
+        applyAccent();
+        renderSettings();
+        toast('已恢复默认主题色', 'success');
         break;
       }
       case 'save-proxy': {
@@ -2232,6 +2485,7 @@ async function onGlobalClick(e) {
       }
       case 'login': await loginModal(); break;
       case 'settings-general': S.settingsScreen = 'general'; renderSettings(); $('#main').scrollTop = 0; break;
+      case 'settings-section': S.settingsScreen = 'section'; S.settingsSection = el.dataset.section || 'appearance'; renderSettings(); $('#main').scrollTop = 0; break;
       case 'settings-hub': S.settingsScreen = 'hub'; renderSettings(); $('#main').scrollTop = 0; break;
       case 'profile-open': {
         if (!(S.auth && S.auth.signedIn)) { await loginModal(); break; }
@@ -2462,6 +2716,20 @@ function bindBackendEvents() {
     if (S.route === 'downloads' && !renderTimer) {
       renderTimer = setTimeout(() => { renderTimer = null; render(); }, 250);
     }
+  });
+  onEvent('download:done', (job) => {
+    if (job && job.id) {
+      job.status = 'done';
+      job.percent = 100;
+      job.done = job.total || job.done;
+      const i = S.downloads.findIndex((x) => x.id === job.id);
+      if (i >= 0) S.downloads[i] = Object.assign({}, S.downloads[i], job);
+      else S.downloads.push(job);
+    }
+    loadDownloads().then(() => {
+      updateRail();
+      if (S.route === 'downloads') render();
+    });
   });
   onEvent('download:removed', () => loadDownloads().then(() => { if (S.route === 'downloads') render(); }));
   onEvent('install:pending', (p) => toast(`${p.name || '应用'} 等待系统确认`, ''));

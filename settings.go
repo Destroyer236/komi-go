@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -76,6 +77,13 @@ func (a *App) SetSetting(key, value string) error {
 	case "theme":
 		if value != "system" && value != "light" && value != "dark" {
 			return errors.New("主题只能是 system/light/dark")
+		}
+	case "ui.accent":
+		if value != "" {
+			if !regexp.MustCompile(`^#[0-9a-fA-F]{6}$`).MatchString(value) {
+				return errors.New("主题色需为 #RRGGBB 格式")
+			}
+			value = strings.ToLower(value)
 		}
 	case "update.auto", "update.prerelease", "update.fallback_older",
 		"ui.close_to_tray", "ui.reduce_motion", "system.autostart", "onboarding.done":
@@ -275,7 +283,7 @@ func (a *App) CacheInfo() map[string]any {
 		dbSize = info.Size()
 	}
 	var dlSize int64
-	_ = filepath.WalkDir(a.layout.Downloads, func(path string, d os.DirEntry, err error) error {
+	_ = filepath.WalkDir(a.dl.Dir(), func(path string, d os.DirEntry, err error) error {
 		if err == nil && d != nil && !d.IsDir() {
 			if info, e := d.Info(); e == nil {
 				dlSize += info.Size()

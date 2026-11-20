@@ -96,6 +96,11 @@ func NewApp() (*App, error) {
 	}
 
 	a.dl = download.New(layout.Downloads, store, a.currentToken, a.emit)
+	if saved, _ := store.GetSetting(context.Background(), "download.dir"); strings.TrimSpace(saved) != "" {
+		if st, err := os.Stat(saved); err == nil && st.IsDir() {
+			a.dl.SetDir(saved)
+		}
+	}
 	if hc, err := platform.HTTPClient(proxy); err == nil {
 		a.dl.SetHTTPClient(hc)
 	}
@@ -324,7 +329,7 @@ func (a *App) AuthState() map[string]any {
 	return map[string]any{
 		"version":         Version,
 		"target":          catalog.CurrentTarget(),
-		"downloadsDir":    a.layout.Downloads,
+		"downloadsDir":    a.dl.Dir(),
 		"dataDir":         a.layout.Root,
 		"appsDir":         a.layout.Apps,
 		"logsDir":         a.layout.Logs,
@@ -584,12 +589,73 @@ func (a *App) OpenExternal(raw string) error {
 	return platform.OpenURL(raw)
 }
 
+// SetDownloadDir changes where new downloads are saved. An empty value
+// restores the default app download folder.
+func (a *App) SetDownloadDir(dir string) error {
+	path, err := normalizeDownloadDir(dir, a.layout.Downloads)
+	if err != nil {
+		return err
+	}
+	a.dl.SetDir(path)
+	return a.store.SetSetting(context.Background(), "download.dir", path)
+}
+
+// ChooseDownloadDir opens the native folder picker and applies the choice.
+func (a *App) ChooseDownloadDir() (string, error) {
+	if a.ctx == nil {
+		return "", errors.New("应用尚未就绪")
+	}
+	dir, err := wruntime.OpenDirectoryDialog(a.ctx, wruntime.OpenDialogOptions{
+		Title:            "选择下载目录",
+		DefaultDirectory: a.dl.Dir(),
+	})
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(dir) == "" {
+		return "", nil
+	}
+	if err := a.SetDownloadDir(dir); err != nil {
+		return "", err
+	}
+	return a.dl.Dir(), nil
+}
+
+func normalizeDownloadDir(dir, fallback string) (string, error) {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		dir = fallback
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(abs, 0o755); err != nil {
+		return "", fmt.Errorf("无法创建下载目录：%w", err)
+	}
+	st, err := os.Stat(abs)
+	if err != nil {
+		return "", err
+	}
+	if !st.IsDir() {
+		return "", errors.New("所选路径不是文件夹")
+	}
+	probe, err := os.CreateTemp(abs, ".komi-write-*")
+	if err != nil {
+		return "", errors.New("该目录不可写，请选择其他位置")
+	}
+	name := probe.Name()
+	_ = probe.Close()
+	_ = os.Remove(name)
+	return abs, nil
+}
+
 // OpenFolder opens a known app folder.
 func (a *App) OpenFolder(kind string) error {
 	var dir string
 	switch kind {
 	case "downloads":
-		dir = a.layout.Downloads
+		dir = a.dl.Dir()
 	case "apps":
 		dir = a.layout.Apps
 	case "logs":

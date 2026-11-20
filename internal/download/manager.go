@@ -161,6 +161,24 @@ func (m *Manager) SetHTTPClient(h *http.Client) {
 	}
 }
 
+// Dir returns the directory new download jobs are written to.
+func (m *Manager) Dir() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.dir
+}
+
+// SetDir changes the destination for new jobs. Existing jobs keep their paths.
+func (m *Manager) SetDir(dir string) {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return
+	}
+	m.mu.Lock()
+	m.dir = dir
+	m.mu.Unlock()
+}
+
 // SetAuto enables latency-based source selection. When false, the direct
 // GitHub URL is always tried first, then mirrors in configured order.
 func (m *Manager) SetAuto(on bool) {
@@ -227,13 +245,13 @@ func (m *Manager) Start(req Request) (Job, error) {
 		return Job{}, errors.New("资产名为空")
 	}
 	if req.Asset.Size > 0 {
-		if free, err := diskFree(m.dir); err == nil && free < uint64(req.Asset.Size*3) {
+		if free, err := diskFree(m.Dir()); err == nil && free < uint64(req.Asset.Size*3) {
 			return Job{}, fmt.Errorf("磁盘空间不足：需要至少 %s，当前可用 %s",
 				platform.HumanBytes(req.Asset.Size*3), platform.HumanBytes(int64(free)))
 		}
 	}
 	name := platform.SanitizeFileName(req.Asset.Name)
-	dest := platform.UniquePath(m.dir, name)
+	dest := platform.UniquePath(m.Dir(), name)
 	id := jobID(req.RepoKey, req.Asset.ID, req.Asset.DownloadURL)
 
 	m.mu.Lock()
