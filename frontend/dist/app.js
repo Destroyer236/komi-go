@@ -548,35 +548,33 @@ function platformChips(r, compact) {
 }
 
 const DISCOVER_CATEGORIES = [
-  { id: 'ai', label: '人工智能', words: ['ai', 'llm', 'gpt', 'openai', 'ollama', 'transformer', 'neural', 'machine-learning', 'machine learning', 'deep-learning', 'chatbot', 'diffusion', 'stable-diffusion', 'whisper', '人工智能', '大模型', '机器学习', '智能'] },
-  { id: 'privacy', label: '隐私', words: ['privacy', 'security', 'encrypt', 'encryption', 'vault', 'password', 'passwd', '2fa', 'totp', 'secret', 'credential', 'anonym', 'tor', '隐私', '加密', '密码', '密钥', '安全'] },
-  { id: 'network', label: '网络', words: ['network', 'networking', 'proxy', 'http', 'https', 'dns', 'socket', 'ssh', 'ftp', 'download', 'torrent', 'p2p', 'curl', 'wget', 'wireguard', 'tailscale', 'tunnel', 'sync', '网络', '代理', '下载', '隧道', '同步'] },
-  { id: 'media', label: '媒体', words: ['media', 'video', 'audio', 'image', 'photo', 'music', 'player', 'editor', 'ffmpeg', 'codec', 'stream', 'screenshot', 'recorder', '视频', '音频', '图片', '照片', '音乐', '播放器', '剪辑', '截图', '录屏', '媒体'] },
-  { id: 'social', label: '社交', words: ['social', 'chat', 'messaging', 'message', 'mastodon', 'fediverse', 'matrix', 'discord', 'telegram', 'slack', 'wechat', 'twitter', 'bluesky', 'forum', 'bbs', '社交', '聊天', '消息', '论坛'] },
-  { id: 'reading', label: '阅读', words: ['read', 'reader', 'book', 'ebook', 'rss', 'feed', 'markdown', 'docs', 'document', 'wiki', 'note', 'pdf', '阅读', '图书', '电子书', '文档', '笔记'] },
+  { id: 'ai', label: '人工智能', codes: ['ai'] },
+  { id: 'privacy', label: '隐私', codes: ['privacy', 'security'] },
+  { id: 'network', label: '网络', codes: ['networking', 'browser', 'messaging'] },
+  { id: 'media', label: '媒体', codes: ['audio', 'video', 'photo'] },
+  { id: 'social', label: '社交', codes: ['social'] },
+  { id: 'reading', label: '阅读', codes: ['reader', 'notes'] },
+  { id: 'tool', label: '工具', codes: ['launcher', 'backup', 'self-hosted'] },
 ];
 
 function discoverCategoryLabel(id) {
   if (id === 'all') return '全部';
-  if (id === 'tool') return '工具';
   const c = DISCOVER_CATEGORIES.find((x) => x.id === id);
   return c ? c.label : '全部';
 }
 
-function repoCategory(r) {
-  const topic = (r.topics || []).join(' ').toLowerCase();
-  const hay = `${r.name || ''} ${r.description || ''} ${r.language || ''} ${topic}`.toLowerCase();
-  for (const c of DISCOVER_CATEGORIES) {
-    if (c.words.some((w) => (w.includes(' ') || /[^a-z0-9]/.test(w) ? hay.includes(w) : new RegExp(`(^|[^a-z0-9])${w}([^a-z0-9]|$)`).test(hay)))) return c.id;
-  }
-  return 'tool';
+function repoMatchesCategory(r, id) {
+  if (id === 'all') return true;
+  const c = DISCOVER_CATEGORIES.find((x) => x.id === id);
+  if (!c) return false;
+  return (r.topicCodes || []).some((code) => c.codes.includes(String(code).toLowerCase()));
 }
 
 function discoverVisibleResults() {
   const d = S.discover;
   const all = d.results || [];
   if (d.category === 'all') return all;
-  return all.filter((r) => repoCategory(r) === d.category);
+  return all.filter((r) => repoMatchesCategory(r, d.category));
 }
 
 function repoCard(r) {
@@ -1991,8 +1989,7 @@ async function onGlobalClick(e) {
       case 'feed': S.discover.feed = el.dataset.feed; S.discover.page = 1; S.discover.query = ''; loadDiscover(); break;
       case 'category': {
         S.discover.category = el.dataset.category || 'all';
-        S.discover.page = 1;
-        if (S.route !== 'discover' && S.route !== 'repo') navigate('discover');
+        if (S.route !== 'discover') navigate('discover');
         else render();
         break;
       }
