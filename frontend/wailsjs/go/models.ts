@@ -419,6 +419,86 @@ export namespace download {
 
 export namespace github {
 	
+	export class ContributionDay {
+	    date: string;
+	    count: number;
+	    level: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ContributionDay(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.date = source["date"];
+	        this.count = source["count"];
+	        this.level = source["level"];
+	    }
+	}
+	export class ContributionWeek {
+	    days: ContributionDay[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ContributionWeek(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.days = this.convertValues(source["days"], ContributionDay);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ContributionCalendar {
+	    total: number;
+	    weeks: ContributionWeek[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ContributionCalendar(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.total = source["total"];
+	        this.weeks = this.convertValues(source["weeks"], ContributionWeek);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
 	export class DeviceCode {
 	    device_code: string;
 	    user_code: string;

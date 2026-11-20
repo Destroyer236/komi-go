@@ -365,6 +365,22 @@ func (a *App) Profile() map[string]any {
 	}
 }
 
+// ContributionCalendar returns the signed-in account's 53-week contribution
+// grid for the profile page. It is intentionally independent from ProfileRepos
+// so a slow repository scan never blocks the heatmap.
+func (a *App) ContributionCalendar() (github.ContributionCalendar, error) {
+	if a.currentToken() == "" {
+		return github.ContributionCalendar{}, errors.New("请先登录 GitHub")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cal, err := a.clientFor("github.com").ContributionCalendar(ctx)
+	if err != nil {
+		return github.ContributionCalendar{}, fmt.Errorf("读取贡献活动失败：%s", friendly(err))
+	}
+	return cal, nil
+}
+
 // inferAssetPlatform guesses a platform from a release asset filename when the
 // release API did not attach an explicit platform.
 func inferAssetPlatform(name string) string {

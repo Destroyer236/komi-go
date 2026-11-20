@@ -938,6 +938,110 @@ func (c *Client) Profile(ctx context.Context) (UserProfile, error) {
 	return p, nil
 }
 
+// ContributionDay is one cell of the GitHub contribution graph.
+type ContributionDay struct {
+	Date  string `json:"date"`
+	Count int    `json:"count"`
+	Level int    `json:"level"`
+}
+
+// ContributionWeek is a vertical column of seven contribution days.
+type ContributionWeek struct {
+	Days []ContributionDay `json:"days"`
+}
+
+// ContributionCalendar is the profile page's "今年 N 次" summary plus the
+// 53-week grid. GitHub returns weeks as Sunday..Saturday columns.
+type ContributionCalendar struct {
+	Total int                `json:"total"`
+	Weeks []ContributionWeek `json:"weeks"`
+}
+
+// ContributionCalendar queries GitHub's GraphQL contribution calendar for the
+// signed-in viewer. REST has no equivalent endpoint, so this deliberately uses
+// a single GraphQL request rather than scraping the profile HTML.
+func (c *Client) ContributionCalendar(ctx context.Context) (ContributionCalendar, error) {
+	if c.IsForgejo() || c.host != "github.com" {
+		return ContributionCalendar{}, nil
+	}
+	token := ""
+	if c.token != nil {
+		token = strings.TrimSpace(c.token())
+	}
+	if token == "" {
+		return ContributionCalendar{}, &Error{Status: 401, Code: "E_AUTH", Message: "请先登录 GitHub"}
+	}
+	const query = `query { viewer { login contributionsCollection { contributionCalendar { totalContributions weeks { contributionDays { date contributionCount } } } } } }`
+	body, _ := json.Marshal(map[string]string{"query": query})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, defaultAPIBase+"/graphql", bytes.NewReader(body))
+	if err != nil {
+		return ContributionCalendar{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", userAgent)
+	res, err := c.http.Do(req)
+	if err != nil {
+		return ContributionCalendar{}, &Error{Status: 0, Code: "E_NET", Message: "无法连接 GitHub 贡献服务"}
+	}
+	defer res.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(res.Body, maxBodyBytes))
+	if err != nil {
+		return ContributionCalendar{}, &Error{Status: 500, Code: "E_PARSE", Message: "无法读取贡献数据"}
+	}
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return ContributionCalendar{}, &Error{Status: res.StatusCode, Code: "E_HTTP", Message: fmt.Sprintf("GitHub 贡献服务返回 %d", res.StatusCode)}
+	}
+	var payload struct {
+		Data struct {
+			Viewer struct {
+				ContributionsCollection struct {
+					ContributionCalendar struct {
+						Total int `json:"totalContributions"`
+						Weeks []struct {
+							Days []struct {
+								Date  string `json:"date"`
+								Count int    `json:"contributionCount"`
+							} `json:"contributionDays"`
+						} `json:"weeks"`
+					} `json:"contributionCalendar"`
+				} `json:"contributionsCollection"`
+			} `json:"viewer"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return ContributionCalendar{}, &Error{Status: 500, Code: "E_PARSE", Message: "无法解析贡献数据"}
+	}
+	if len(payload.Errors) > 0 {
+		return ContributionCalendar{}, &Error{Status: 502, Code: "E_GRAPHQL", Message: "读取贡献活动失败：" + payload.Errors[0].Message}
+	}
+	cal := payload.Data.Viewer.ContributionsCollection.ContributionCalendar
+	out := ContributionCalendar{Total: cal.Total, Weeks: make([]ContributionWeek, 0, len(cal.Weeks))}
+	for _, week := range cal.Weeks {
+		days := make([]ContributionDay, 0, len(week.Days))
+		for _, day := range week.Days {
+			level := 0
+			switch {
+			case day.Count >= 8:
+				level = 4
+			case day.Count >= 4:
+				level = 3
+			case day.Count >= 2:
+				level = 2
+			case day.Count >= 1:
+				level = 1
+			}
+			days = append(days, ContributionDay{Date: day.Date, Count: day.Count, Level: level})
+		}
+		out.Weeks = append(out.Weeks, ContributionWeek{Days: days})
+	}
+	return out, nil
+}
+
 // Login validates the token and returns the account name. It uses the retrying
 // transport so a transient 5xx or a 429 with Retry-After does not surface as a
 // failed sign-in.

@@ -46,6 +46,10 @@ export function CompleteOnboarding(arg1, arg2, arg3) {
   return window['go']['main']['App']['CompleteOnboarding'](arg1, arg2, arg3);
 }
 
+export function ContributionCalendar() {
+  return window['go']['main']['App']['ContributionCalendar']();
+}
+
 export function Diagnostics() {
   return window['go']['main']['App']['Diagnostics']();
 }

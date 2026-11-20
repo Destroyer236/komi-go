@@ -3,10 +3,10 @@
 import {main} from '../models';
 import {selfupdate} from '../models';
 import {ledger} from '../models';
+import {github} from '../models';
 import {catalog} from '../models';
 import {installer} from '../models';
 import {download} from '../models';
-import {github} from '../models';
 
 export function ApplyImport():Promise<main.ImportReport>;
 
@@ -29,6 +29,8 @@ export function ClearFinishedDownloads():Promise<number>;
 export function ClearToken():Promise<void>;
 
 export function CompleteOnboarding(arg1:string,arg2:boolean,arg3:boolean):Promise<void>;
+
+export function ContributionCalendar():Promise<github.ContributionCalendar>;
 
 export function Diagnostics():Promise<string>;
 

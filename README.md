@@ -8,16 +8,16 @@ Windows 桌面版 GitHub Release 应用商店，Go + Wails v2 + WebView2 + SQLit
 
 | 模块 | 已落地能力 |
 |---|---|
-| 搜索 / 发现 | 热门、新鲜、经典、Windows 四条榜单；关键词搜索；语言筛选；星标/更新/复刻排序；搜索历史；分页；只看有 Windows 安装资产的仓库 |
-| 仓库详情 | README Markdown 渲染与相对链接改写、Release 折叠列表、资产表、下载、复制链接、打开仓库页/Issues、预发布与缓存标记 |
+| 搜索 / 发现 | 热门、新鲜、经典、Windows 四条榜单；人工智能/隐私/网络/媒体/社交/阅读/工具分类；关键词搜索；语言筛选；星标/更新/复刻排序；搜索历史；分页；只看有 Windows 安装资产的仓库 |
+| 仓库详情 | README Markdown 渲染与相对链接改写（含 GFM 表格、表格内图片）、Release 折叠列表、资产表、下载、复制链接、打开仓库页/Issues、预发布与缓存标记 |
 | 下载 | 2 并发队列、用户暂停/继续/取消、`.part` Range 续传、重启恢复、磁盘预检（包体 ×3）、镜像竞速、停滞 60s 检测、SHA-256 校验、无摘要标记“未校验” |
 | 应用库 | 真实安装目录、占用空间、打开应用、卸载（MSI ProductCode / UninstallString）、更新、固定、跳过版本、应用偏好、移除记录、恢复跟踪、导入导出、外部应用扫描与匹配 |
-| 认证 | Windows 凭据管理器持久化 token、PAT 登录、Device Flow（内置 Komi Go OAuth App，无需自备 client_id）、401 自动清 token 并提示重登 |
+| 认证 | Windows 凭据管理器持久化 token、Device Flow 登录（内置 Komi Go OAuth App，无需自备 client_id）、401 自动清 token 并提示重登 |
 | 网络 | 3 次指数退避 + 抖动、429/`Retry-After`、同 URL single-flight、分层 TTL 缓存、5 分钟负缓存、离线 stale、代理设置 |
 | 匹配算法 | Release 线识别、`owner/repo#app` 多应用归属、`pickedAssetIndex`、预发布开关、回退旧版本、资产过滤、七条更新判定、versionCode/同 tag 大小守卫 |
 | 生态 | GitHub / Codeberg / 自建 Forgejo 客户端；`komi://` 深链（owner/repo、releases/tag、tags、tree、git@、分享链接）；注册表协议注册；单实例转交深链 |
 | 桌面 | 托盘、关闭到托盘、开机启动、注册表安装检测、自更新检查/下载/延迟替换、`komi://` 注册、Inno Setup 安装包、amd64/arm64 构建、可选代码签名 |
-| UI | M3E 22 色角色、4/12/16/28 圆角、按压形变、wavy 进度、首次引导、代理/镜像/缓存设置、自动检查更新、类型化错误文案、48px 触控目标、reduce-motion |
+| UI | M3E 22 色角色、4/12/16/28 圆角、按压形变、wavy 进度、首次引导、亚克力弹窗、上游式个人资料/调整分组设置、贡献活动热力图、只显示带 Release 的个人仓库、代理/镜像/缓存设置、自动检查更新、类型化错误文案、48px 触控目标、reduce-motion |
 
 ## 技术栈
 

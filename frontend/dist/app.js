@@ -18,6 +18,10 @@ const S = {
   profileError: '',
   profileFilter: 'released',
   profileQuery: '',
+  contributions: null,
+  contributionsLoaded: false,
+  contributionsLoading: false,
+  contributionsError: '',
   settings: {},
   settingsScreen: 'hub',
   installs: [],
@@ -35,7 +39,7 @@ const S = {
   repoUi: { key: '', platform: '', channel: 'stable', release: 0, asset: 0 },
   discover: {
     feed: 'trending', page: 1, query: '', sort: 'best', lang: '',
-    only: false, results: [], loading: false, error: '', history: [], total: 0, hasMore: false, platform: 'all',
+    only: false, results: [], loading: false, error: '', history: [], total: 0, hasMore: false, platform: 'all', category: 'all',
   },
   onboarding: { needs: false, step: 0, theme: 'system', auto: true, tray: true, autostart: false },
   busy: 0,
@@ -267,6 +271,29 @@ function safeRawHtml(src, base) {
   return s;
 }
 
+function mdTableCells(line) {
+  let s = String(line || '').trim();
+  if (s.startsWith('|')) s = s.slice(1);
+  if (s.endsWith('|')) s = s.slice(0, -1);
+  return s.replace(/\\\|/g, '\u0001').split('|').map((c) => c.replace(/\u0001/g, '|').trim());
+}
+
+function isMdTableSeparator(line) {
+  const cells = mdTableCells(line);
+  return cells.length >= 2 && cells.every((c) => /^:?-+:?$/.test(c.replace(/\s/g, '')));
+}
+
+function inlineTableCell(raw, base) {
+  const tags = [];
+  let s = String(raw || '').replace(/<[^>]+>/g, (m) => {
+    const safe = safeRawHtml(m, base);
+    if (!safe) return '';
+    tags.push(safe);
+    return `\u0002${tags.length - 1}\u0002`;
+  });
+  return inlineMd(s, base).replace(/\u0002(\d+)\u0002/g, (_, i) => tags[Number(i)] || '');
+}
+
 function renderMarkdown(src, base) {
   const lines = String(src || '').replace(/\r\n?/g, '\n').split('\n');
   const out = [];
@@ -287,7 +314,8 @@ function renderMarkdown(src, base) {
   };
   const closeAll = () => { flushPara(); flushList(); flushHtml(); };
 
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     if (html.length) {
       if (!line.trim()) { flushHtml(); continue; }
       html.push(line);
@@ -300,6 +328,29 @@ function renderMarkdown(src, base) {
     }
     if (code) { codeBuf.push(line); continue; }
     if (!line.trim()) { closeAll(); continue; }
+
+    // GitHub-flavoured markdown tables: header row + |---| separator row.
+    if (line.includes('|') && i + 1 < lines.length && isMdTableSeparator(lines[i + 1])) {
+      closeAll();
+      const headers = mdTableCells(line);
+      const aligns = mdTableCells(lines[i + 1]).map((c) => {
+        const left = c.startsWith(':');
+        const right = c.endsWith(':');
+        return left && right ? 'center' : right ? 'right' : '';
+      });
+      out.push(`<div class="md-table"><table><thead><tr>${
+        headers.map((c, n) => `<th${aligns[n] ? ` class="align-${aligns[n]}"` : ''}>${inlineTableCell(c, base)}</th>`).join('')
+      }</tr></thead><tbody>`);
+      i += 2;
+      while (i < lines.length && lines[i].trim() && lines[i].includes('|')) {
+        const cells = mdTableCells(lines[i]);
+        out.push(`<tr>${headers.map((_, n) => `<td${aligns[n] ? ` class="align-${aligns[n]}"` : ''}>${inlineTableCell(cells[n] || '', base)}</td>`).join('')}</tr>`);
+        i++;
+      }
+      out.push('</tbody></table></div>');
+      i--; // the outer loop increments past the first non-table line.
+      continue;
+    }
 
     // GitHub READMEs commonly use raw HTML for centered logos and badges.
     if (/^\s*<[a-zA-Z!/]/.test(line)) { closeAll(); html = [line]; continue; }
@@ -346,8 +397,15 @@ function readmeBase(view) {
 
 /* ------------------------------------------------------------------ rail */
 
+function updateCategoryRail() {
+  $$('.category-item').forEach((el) => {
+    el.classList.toggle('active', (el.dataset.category || 'all') === S.discover.category);
+  });
+}
+
 function updateRail() {
   const auth = S.auth || {};
+  updateCategoryRail();
   const acct = $('#railAccount');
   if (acct) {
     acct.textContent = auth.signedIn ? (auth.login || '已登录') : '未登录';
@@ -489,6 +547,38 @@ function platformChips(r, compact) {
   return list.map((p) => `<span class="badge ${p === local ? 'primary' : 'outline'} platform-chip" title="${p === local ? '匹配本机系统' : ''}">${platformLabel(p)}</span>`).join('');
 }
 
+const DISCOVER_CATEGORIES = [
+  { id: 'ai', label: '人工智能', words: ['ai', 'llm', 'gpt', 'openai', 'ollama', 'transformer', 'neural', 'machine-learning', 'machine learning', 'deep-learning', 'chatbot', 'diffusion', 'stable-diffusion', 'whisper', '人工智能', '大模型', '机器学习', '智能'] },
+  { id: 'privacy', label: '隐私', words: ['privacy', 'security', 'encrypt', 'encryption', 'vault', 'password', 'passwd', '2fa', 'totp', 'secret', 'credential', 'anonym', 'tor', '隐私', '加密', '密码', '密钥', '安全'] },
+  { id: 'network', label: '网络', words: ['network', 'networking', 'proxy', 'http', 'https', 'dns', 'socket', 'ssh', 'ftp', 'download', 'torrent', 'p2p', 'curl', 'wget', 'wireguard', 'tailscale', 'tunnel', 'sync', '网络', '代理', '下载', '隧道', '同步'] },
+  { id: 'media', label: '媒体', words: ['media', 'video', 'audio', 'image', 'photo', 'music', 'player', 'editor', 'ffmpeg', 'codec', 'stream', 'screenshot', 'recorder', '视频', '音频', '图片', '照片', '音乐', '播放器', '剪辑', '截图', '录屏', '媒体'] },
+  { id: 'social', label: '社交', words: ['social', 'chat', 'messaging', 'message', 'mastodon', 'fediverse', 'matrix', 'discord', 'telegram', 'slack', 'wechat', 'twitter', 'bluesky', 'forum', 'bbs', '社交', '聊天', '消息', '论坛'] },
+  { id: 'reading', label: '阅读', words: ['read', 'reader', 'book', 'ebook', 'rss', 'feed', 'markdown', 'docs', 'document', 'wiki', 'note', 'pdf', '阅读', '图书', '电子书', '文档', '笔记'] },
+];
+
+function discoverCategoryLabel(id) {
+  if (id === 'all') return '全部';
+  if (id === 'tool') return '工具';
+  const c = DISCOVER_CATEGORIES.find((x) => x.id === id);
+  return c ? c.label : '全部';
+}
+
+function repoCategory(r) {
+  const topic = (r.topics || []).join(' ').toLowerCase();
+  const hay = `${r.name || ''} ${r.description || ''} ${r.language || ''} ${topic}`.toLowerCase();
+  for (const c of DISCOVER_CATEGORIES) {
+    if (c.words.some((w) => (w.includes(' ') || /[^a-z0-9]/.test(w) ? hay.includes(w) : new RegExp(`(^|[^a-z0-9])${w}([^a-z0-9]|$)`).test(hay)))) return c.id;
+  }
+  return 'tool';
+}
+
+function discoverVisibleResults() {
+  const d = S.discover;
+  const all = d.results || [];
+  if (d.category === 'all') return all;
+  return all.filter((r) => repoCategory(r) === d.category);
+}
+
 function repoCard(r) {
   const host = hostOf(r);
   const inst = (S.installs || []).find((a) => a && a.owner === r.owner && a.repo === r.name && (!a.sourceHost || a.sourceHost === host));
@@ -520,6 +610,8 @@ function renderDiscover() {
   const main = $('#main');
   const scroll = main.scrollTop;
   const isSearch = !!d.query.trim();
+  const categoryLabel = discoverCategoryLabel(d.category);
+  const visible = discoverVisibleResults();
   const tabs = [['trending', '热门'], ['fresh', '新鲜'], ['classic', '经典'], ['windows', 'Windows']];
   const hero = `
     <section class="card hero hero-banner">
@@ -588,10 +680,12 @@ function renderDiscover() {
     list = `<div class="repo-grid">${'<div class="skeleton"></div>'.repeat(6)}</div>`;
   } else if (d.error) {
     list = `<div class="empty"><div class="art">${icon('alert', 'lg')}</div><h3>搜索失败</h3><p>${esc(d.error)}</p><button class="btn tonal" data-action="retry-discover">${icon('refresh')} 重试</button></div>`;
-  } else if (!d.results.length) {
-    list = `<div class="empty"><div class="art">${icon('inbox', 'lg')}</div><h3>没有找到结果</h3><p>换一个关键词，或切换到“全部”平台查看所有安装包。</p><button class="btn tonal" data-action="platform" data-platform="all">查看全部平台</button></div>`;
+  } else if (!visible.length) {
+    list = d.results.length && d.category !== 'all'
+      ? `<div class="empty"><div class="art">${icon('inbox', 'lg')}</div><h3>“${esc(categoryLabel)}”分类暂无应用</h3><p>当前结果里没有归到这个分类的仓库，可以看看全部分类。</p><button class="btn tonal" data-action="category" data-category="all">查看全部</button></div>`
+      : `<div class="empty"><div class="art">${icon('inbox', 'lg')}</div><h3>没有找到结果</h3><p>换一个关键词，或切换到“全部”平台查看所有安装包。</p><button class="btn tonal" data-action="platform" data-platform="all">查看全部平台</button></div>`;
   } else {
-    list = `<div class="repo-grid">${d.results.map(repoCard).join('')}</div>
+    list = `<div class="repo-grid">${visible.map(repoCard).join('')}</div>
       <div class="pager">
         <button class="icon-btn" data-action="page" data-page="${d.page - 1}" ${d.page <= 1 ? 'disabled' : ''} aria-label="上一页">${icon('back')}</button>
         <span class="badge outline">第 ${d.page} 页</span>
@@ -603,8 +697,8 @@ function renderDiscover() {
     ${searchbar}
     <div class="page-head" style="margin-top:${isSearch ? '0' : '24px'}">
       <div>
-        <h2>${isSearch ? '搜索结果' : '发现'}</h2>
-        <div class="sub">${isSearch ? `“${esc(d.query)}” · ${d.platform === 'all' ? '所有平台' : platformLabel(d.platform)}安装包` : `所有平台安装包 · 本机 ${platformLabel(localPlatform())} 优先推荐`}</div>
+        <h2>${isSearch ? '搜索结果' : (d.category === 'all' ? '发现' : esc(categoryLabel))}</h2>
+        <div class="sub">${isSearch ? `“${esc(d.query)}” · ${d.category === 'all' ? '' : esc(categoryLabel) + '分类 · '}${d.platform === 'all' ? '所有平台' : platformLabel(d.platform)}安装包` : `${d.category === 'all' ? '所有平台安装包' : '分类：' + esc(categoryLabel)} · 本机 ${platformLabel(localPlatform())} 优先推荐`}</div>
       </div>
       ${isSearch ? '<button class="btn text" data-action="clear-search">清除搜索</button>' : ''}
     </div>
@@ -903,7 +997,7 @@ function repoPage() {
       ${readmeHead}
       ${view.readme
         ? `<div class="readme-body collapsed" id="readmeBody"><div class="markdown">${renderMarkdown(view.readme, readmeBase(view))}</div></div>
-           <div class="readme-actions"><button class="btn text small" data-action="toggle-readme">展开全文 ${icon('chevron')}</button></div>`
+           <div class="readme-actions"><button class="btn text small readme-toggle" data-action="toggle-readme"><span class="readme-label">展开全文</span>${icon('chevron')}</button></div>`
         : `<div class="note">${esc(view.readmeError || '这个仓库没有 README。')}</div>`}
     </section>
     <div class="spread" style="margin-top:18px">
@@ -1115,7 +1209,7 @@ function settingsProfile(a) {
       <div class="profile-actions">
         ${signed
           ? `<button class="btn outlined small" data-action="logout">退出登录</button><button class="btn text small" data-action="login-device">切换账号</button>`
-          : `<button class="btn filled small" data-action="login">登录 GitHub</button><button class="btn text small" data-action="login-device">设备码登录</button>`}
+          : `<button class="btn filled small" data-action="login">登录 GitHub</button>`}
       </div>
     </div>
     <div class="profile-stats">
@@ -1241,6 +1335,45 @@ async function ensureProfileRepos(force = false) {
   }
 }
 
+async function ensureContributions(force = false) {
+  if (S.contributionsLoading) return;
+  if (S.contributionsLoaded && !force) return;
+  S.contributionsLoading = true;
+  S.contributionsError = '';
+  S.contributionsLoaded = false;
+  if (S.route === 'settings' && S.settingsScreen === 'profile') renderSettings();
+  try {
+    S.contributions = await call('ContributionCalendar');
+    S.contributionsLoaded = true;
+  } catch (e) {
+    S.contributionsError = e && e.message ? e.message : String(e);
+  } finally {
+    S.contributionsLoading = false;
+    if (S.route === 'settings' && S.settingsScreen === 'profile') renderSettings();
+  }
+}
+
+function contributionCard() {
+  if (!(S.auth && S.auth.signedIn)) return '';
+  const cal = S.contributions;
+  let body = '';
+  if (S.contributionsError) {
+    body = `<div class="contribution-empty"><span>${esc(S.contributionsError)}</span><button class="btn text small" data-action="contributions-retry">重试</button></div>`;
+  } else if (S.contributionsLoading || !cal) {
+    body = `<div class="contribution-loading" aria-label="正在读取贡献活动"></div>`;
+  } else {
+    const weeks = (cal.weeks || []).map((week) => `<div class="contribution-week">${
+      (week.days || []).map((day) => `<span class="contribution-cell level-${clamp(Number(day.level) || 0, 0, 4)}" title="${esc(day.date)} · ${Number(day.count) || 0} 次贡献" aria-label="${esc(day.date)} ${Number(day.count) || 0} 次贡献"></span>`).join('')
+    }</div>`).join('');
+    body = `<div class="contribution-grid">${weeks}</div>`;
+  }
+  return `<section class="contribution-card">
+    <div class="contribution-head"><h2>贡献活动</h2><span>${cal ? `今年 ${Number(cal.total) || 0} 次` : '今年 — 次'}</span></div>
+    ${body}
+    <div class="contribution-legend"><span>较少</span><div class="contribution-scale">${[0, 1, 2, 3, 4].map((l) => `<i class="level-${l}"></i>`).join('')}</div><span>较多</span></div>
+  </section>`;
+}
+
 function renderSettingsProfile() {
   const a = S.auth || {};
   const filters = [['released', '有发布版'], ['windows', '可在此安装'], ['installed', '已安装']];
@@ -1250,6 +1383,7 @@ function renderSettingsProfile() {
       <div><h1>${esc(a.login || '个人资料')}</h1><div class="sub">仓库、贡献与发布版本。</div></div>
     </div>
     ${settingsProfile(a)}
+    ${contributionCard()}
     <div class="profile-search-row">
       <div class="profile-search">${icon('search')}<input id="profileSearch" placeholder="搜索仓库…" value="${esc(S.profileQuery)}" aria-label="搜索仓库"></div>
     </div>
@@ -1555,36 +1689,14 @@ async function appPrefs(id) {
   };
 }
 
-async function loginModal(mode = 'pat') {
-  const a = S.auth || {};
-  openModal(`<div class="modal-head"><div><div class="modal-title">登录 GitHub</div><div class="modal-sub">提升 API 配额，访问私有仓库。令牌保存在 Windows 凭据管理器。</div></div><button class="icon-btn" data-action="close-modal" aria-label="关闭">${icon('close')}</button></div>
-    <div class="tab-group" style="margin:10px 0 16px">
-      <button class="tab" aria-selected="${mode === 'pat'}" data-action="login-tab" data-mode="pat">个人访问令牌</button>
-      <button class="tab" aria-selected="${mode === 'device'}" data-action="login-tab" data-mode="device">设备码</button>
-    </div>
-    ${mode === 'device' ? `
-      <div class="note" style="margin-bottom:12px">已内置 Komi Go 的 OAuth App，无需填写 client_id。点击开始后，把生成的 8 位代码填到 GitHub 授权页即可登录。</div>
-      <div class="modal-actions"><button class="btn filled" id="deviceStart">生成设备码</button></div>
-      <div id="deviceArea"></div>`
-    : `
-      <div class="field"><label>Fine-grained / classic token</label><input class="input mono" id="tokenInput" type="password" placeholder="ghp_… 或 github_pat_…" autocomplete="off"></div>
-      <div class="note" style="margin-top:10px">只需 public_repo / read:user；不要粘贴带有写权限的令牌到不可信环境。</div>
-      <div class="modal-actions"><button class="btn text" data-action="close-modal">取消</button><button class="btn filled" id="tokenSave">保存并验证</button></div>`}`);
-  const save = $('#tokenSave');
-  if (save) save.onclick = async () => {
-    const token = $('#tokenInput').value.trim();
-    if (!token) { toast('请输入令牌', 'error'); return; }
-    busyOn();
-    try {
-      const login = await call('SetToken', token);
-      toast(`已登录：${login}`, 'success');
-      closeModal(); await loadAuth(); await loadProfile(); await loadSettings(); if (S.route === 'settings') renderSettings();
-    } catch (e) { notifyError(e); }
-    finally { busyOff(); }
-  };
+async function loginModal() {
+  openModal(`<div class="modal-head"><div><div class="modal-title">登录 GitHub</div><div class="modal-sub">使用设备码授权，令牌保存在 Windows 凭据管理器。</div></div><button class="icon-btn" data-action="close-modal" aria-label="关闭">${icon('close')}</button></div>
+    <div class="note" style="margin-bottom:12px">已内置 Komi Go 的 OAuth App，无需填写 client_id。点击开始后，把生成的 8 位代码填到 GitHub 授权页即可登录。</div>
+    <div class="modal-actions"><button class="btn filled" id="deviceStart">生成设备码</button></div>
+    <div id="deviceArea"></div>`);
   const start = $('#deviceStart');
   if (start) start.onclick = startDeviceFlow;
-  if (mode === 'device') startDeviceFlow();
+  startDeviceFlow();
 }
 
 async function startDeviceFlow() {
@@ -1877,6 +1989,13 @@ async function onGlobalClick(e) {
         break;
       }
       case 'feed': S.discover.feed = el.dataset.feed; S.discover.page = 1; S.discover.query = ''; loadDiscover(); break;
+      case 'category': {
+        S.discover.category = el.dataset.category || 'all';
+        S.discover.page = 1;
+        if (S.route !== 'discover' && S.route !== 'repo') navigate('discover');
+        else render();
+        break;
+      }
       case 'history-search': {
         S.discover.query = el.dataset.q || '';
         S.discover.page = 1;
@@ -1925,7 +2044,13 @@ async function onGlobalClick(e) {
       }
       case 'toggle-readme': {
         const body = $('#readmeBody');
-        if (body) { body.classList.toggle('collapsed'); body.classList.toggle('expanded'); }
+        if (body) {
+          const expanded = body.classList.toggle('expanded');
+          body.classList.toggle('collapsed', !expanded);
+          const label = $('.readme-toggle .readme-label');
+          if (label) label.textContent = expanded ? '收起' : '展开全文';
+          $$('[data-action="toggle-readme"]').forEach((btn) => btn.classList.toggle('is-expanded', expanded));
+        }
         break;
       }
       case 'release-notes': releaseNotesModal(Number(el.dataset.index)); break;
@@ -2073,17 +2198,19 @@ async function onGlobalClick(e) {
         if (S.route === 'settings') renderSettings();
         break;
       }
-      case 'login': await loginModal('pat'); break;
+      case 'login': await loginModal(); break;
       case 'settings-general': S.settingsScreen = 'general'; renderSettings(); $('#main').scrollTop = 0; break;
       case 'settings-hub': S.settingsScreen = 'hub'; renderSettings(); $('#main').scrollTop = 0; break;
       case 'profile-open': {
-        if (!(S.auth && S.auth.signedIn)) { await loginModal('pat'); break; }
+        if (!(S.auth && S.auth.signedIn)) { await loginModal(); break; }
         S.settingsScreen = 'profile'; renderSettings(); $('#main').scrollTop = 0;
         ensureProfileRepos();
+        ensureContributions();
         break;
       }
       case 'profile-filter': S.profileFilter = el.dataset.filter || 'released'; renderSettings(); break;
       case 'profile-repos-retry': S.profileReposLoaded = false; ensureProfileRepos(true); break;
+      case 'contributions-retry': S.contributionsLoaded = false; ensureContributions(true); break;
       case 'profile-open-repo': await openRepo('github.com', el.dataset.owner, el.dataset.name); break;
       case 'nav-library': navigate('library'); break;
       case 'nav-downloads': navigate('downloads'); break;
@@ -2124,13 +2251,12 @@ async function onGlobalClick(e) {
           <div class="modal-actions"><button class="btn text" data-action="close-modal">知道了</button></div>`, 'narrow');
         break;
       }
-      case 'account': if (S.auth && S.auth.signedIn) navigate('settings'); else await loginModal('pat'); break;
-      case 'login-device': await loginModal('device'); break;
-      case 'login-tab': await loginModal(el.dataset.mode); break;
+      case 'account': if (S.auth && S.auth.signedIn) navigate('settings'); else await loginModal(); break;
+      case 'login-device': await loginModal(); break;
       case 'logout': {
         confirmDialog({
           title: '退出登录', body: '会从 Windows 凭据管理器删除令牌。', confirm: '退出', danger: true,
-          onConfirm: async () => { await call('ClearToken'); S.profile = {}; S.profileRepos = []; S.profileReposLoaded = false; await loadAuth(); if (S.route === 'settings') renderSettings(); },
+          onConfirm: async () => { await call('ClearToken'); S.profile = {}; S.profileRepos = []; S.profileReposLoaded = false; S.contributions = null; S.contributionsLoaded = false; await loadAuth(); if (S.route === 'settings') renderSettings(); },
         });
         break;
       }
@@ -2284,6 +2410,8 @@ function bindBackendEvents() {
     S.auth = payload || S.auth;
     S.profileReposLoaded = false;
     S.profileRepos = [];
+    S.contributions = null;
+    S.contributionsLoaded = false;
     updateRail();
     if (S.route === 'settings') { await loadProfile(); renderSettings(); }
   });
