@@ -1,0 +1,21 @@
+{
+  "$schema": "https://wails.io/schemas/v2/wails.json",
+  "name": "komi-go",
+  "outputfilename": "komi-go",
+  "assetdir": "frontend/dist",
+  "frontend:install": "",
+  "frontend:build": "",
+  "frontend:dev:watcher": "",
+  "frontend:dev:serverUrl": "",
+  "author": {
+    "name": "Komi Go",
+    "email": ""
+  },
+  "info": {
+    "companyName": "Komi Go",
+    "productName": "Komi Go",
+    "productVersion": "0.3.0",
+    "copyright": "Apache-2.0",
+    "comments": "A Windows GitHub Release store built with Wails."
+  }
+}
