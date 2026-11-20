@@ -154,6 +154,14 @@ export function PollDeviceFlow(arg1) {
   return window['go']['main']['App']['PollDeviceFlow'](arg1);
 }
 
+export function Profile() {
+  return window['go']['main']['App']['Profile']();
+}
+
+export function ProfileRepos() {
+  return window['go']['main']['App']['ProfileRepos']();
+}
+
 export function Quit() {
   return window['go']['main']['App']['Quit']();
 }

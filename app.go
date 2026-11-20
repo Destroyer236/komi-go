@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -308,7 +309,7 @@ func (a *App) AuthState() map[string]any {
 		}
 		cancel()
 	}
-	clientID, _ := a.store.GetSetting(context.Background(), "github.client_id")
+	clientID := a.oauthClientID()
 	client := a.clientFor("github.com")
 	rate := client.RateLimit()
 	if rate.Limit == 0 || (!rate.Reset.IsZero() && !time.Now().Before(rate.Reset)) {
@@ -339,6 +340,135 @@ func (a *App) AuthState() map[string]any {
 		"rateLimit":       rate,
 		"elevated":        winreg.IsElevated(),
 	}
+}
+
+// Profile returns avatar, display name and social counts for the settings
+// profile header. Signed-out or unavailable accounts degrade to an empty map
+// instead of blocking the settings page.
+func (a *App) Profile() map[string]any {
+	if a.currentToken() == "" {
+		return map[string]any{}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	p, err := a.clientFor("github.com").Profile(ctx)
+	if err != nil {
+		return map[string]any{"login": a.login, "error": friendly(err)}
+	}
+	return map[string]any{
+		"login":       p.Login,
+		"name":        p.Name,
+		"avatarUrl":   p.AvatarURL,
+		"publicRepos": p.PublicRepos,
+		"followers":   p.Followers,
+		"following":   p.Following,
+	}
+}
+
+// inferAssetPlatform guesses a platform from a release asset filename when the
+// release API did not attach an explicit platform.
+func inferAssetPlatform(name string) string {
+	n := strings.ToLower(name)
+	switch {
+	case strings.HasSuffix(n, ".exe"), strings.HasSuffix(n, ".msi"), strings.HasSuffix(n, ".msix"),
+		strings.Contains(n, "windows"), strings.Contains(n, "win64"), strings.Contains(n, "win32"):
+		return "windows"
+	case strings.HasSuffix(n, ".dmg"), strings.HasSuffix(n, ".pkg"),
+		strings.Contains(n, "macos"), strings.Contains(n, "darwin"), strings.Contains(n, "osx"):
+		return "macos"
+	case strings.HasSuffix(n, ".deb"), strings.HasSuffix(n, ".rpm"), strings.HasSuffix(n, ".appimage"),
+		strings.Contains(n, "linux"):
+		return "linux"
+	}
+	return ""
+}
+
+// ProfileRepos lists the signed-in account's repositories that actually have
+// a published Release. The profile page mirrors upstream Komi Store: only
+// release-bearing repositories are shown.
+func (a *App) ProfileRepos() ([]map[string]any, error) {
+	if a.currentToken() == "" {
+		return nil, errors.New("请先登录 GitHub")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	client := a.clientFor("github.com")
+	repos, err := client.UserRepos(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("读取仓库失败：%s", friendly(err))
+	}
+
+	results := make([]map[string]any, len(repos))
+	sem := make(chan struct{}, 4)
+	var wg sync.WaitGroup
+	for i, repo := range repos {
+		wg.Add(1)
+		go func(i int, repo github.UserRepo) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			releases, _, err := client.Releases(ctx, repo.Owner.Login, repo.Name, 1, false)
+			if err != nil || len(releases) == 0 {
+				return
+			}
+			latest := releases[0]
+			if latest.Draft {
+				return
+			}
+			platforms := make([]string, 0, 3)
+			seen := map[string]bool{}
+			for _, asset := range latest.Assets {
+				if asset.Junk {
+					continue
+				}
+				platform := strings.ToLower(strings.TrimSpace(asset.Platform))
+				if platform == "" {
+					platform = inferAssetPlatform(asset.Name)
+				}
+				if platform == "" || seen[platform] {
+					continue
+				}
+				seen[platform] = true
+				platforms = append(platforms, platform)
+			}
+			published := latest.PublishedAt
+			if published.IsZero() {
+				published = latest.CreatedAt
+			}
+			results[i] = map[string]any{
+				"owner":       repo.Owner.Login,
+				"name":        repo.Name,
+				"fullName":    repo.FullName,
+				"description": repo.Description,
+				"language":    repo.Language,
+				"avatarUrl":   repo.Owner.AvatarURL,
+				"stars":       repo.StargazersCount,
+				"forks":       repo.ForksCount,
+				"private":     repo.Private,
+				"updatedAt":   repo.UpdatedAt.Format(time.RFC3339),
+				"latestTag":   latest.TagName,
+				"latestName":  latest.Name,
+				"latestUrl":   latest.HTMLURL,
+				"publishedAt": published.Format(time.RFC3339),
+				"assetCount":  len(latest.Assets),
+				"platforms":   platforms,
+			}
+		}(i, repo)
+	}
+	wg.Wait()
+
+	out := make([]map[string]any, 0, len(results))
+	for _, row := range results {
+		if row != nil {
+			out = append(out, row)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		left, _ := out[i]["publishedAt"].(string)
+		right, _ := out[j]["publishedAt"].(string)
+		return left > right
+	})
+	return out, nil
 }
 
 // SetToken validates a PAT, stores it in Credential Manager and returns the
@@ -388,22 +518,31 @@ func (a *App) ClearToken() error {
 	return nil
 }
 
+const defaultOAuthClientID = "Ov23liZEEZrWKyHzNrRF"
+
+// oauthClientID returns the user override if present, otherwise the OAuth App
+// bundled with Komi Go. A client ID is public; the device flow never ships a
+// client secret.
+func (a *App) oauthClientID() string {
+	if id, _ := a.store.GetSetting(context.Background(), "github.client_id"); strings.TrimSpace(id) != "" {
+		return strings.TrimSpace(id)
+	}
+	return defaultOAuthClientID
+}
+
 // StartDeviceFlow begins GitHub's device authorization flow. The client id
 // comes from settings so no secret ever ships with the app.
 func (a *App) StartDeviceFlow() (github.DeviceCode, error) {
-	clientID, _ := a.store.GetSetting(context.Background(), "github.client_id")
+	clientID := a.oauthClientID()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	return a.clientFor("github.com").StartDeviceFlow(ctx, strings.TrimSpace(clientID), "public_repo read:user")
+	return a.clientFor("github.com").StartDeviceFlow(ctx, strings.TrimSpace(clientID), "repo")
 }
 
 // PollDeviceFlow polls once; the frontend decides the interval. On success the
 // token is validated, persisted and the account name returned.
 func (a *App) PollDeviceFlow(deviceCode string) (map[string]any, error) {
-	clientID, _ := a.store.GetSetting(context.Background(), "github.client_id")
-	if strings.TrimSpace(clientID) == "" {
-		return nil, errors.New("请先在设置中填写 client_id")
-	}
+	clientID := a.oauthClientID()
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 	token, pending, slowDown, err := a.clientFor("github.com").PollDeviceFlow(ctx, clientID, deviceCode)

@@ -11,7 +11,15 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const S = {
   auth: {},
+  profile: {},
+  profileRepos: [],
+  profileReposLoaded: false,
+  profileReposLoading: false,
+  profileError: '',
+  profileFilter: 'released',
+  profileQuery: '',
   settings: {},
+  settingsScreen: 'hub',
   installs: [],
   downloads: [],
   stats: {},
@@ -360,6 +368,7 @@ function updateRail() {
 
 function navigate(route) {
   S.route = route;
+  if (route === 'settings') S.settingsScreen = 'hub';
   const main = $('#main');
   if (main) main.scrollTop = 0;
   render();
@@ -1048,10 +1057,265 @@ function renderDownloads() {
 
 /* ---------------------------------------------------------------- settings */
 
-function settingSwitch(key, title, desc) {
-  return `<div class="setting-row">
-    <div class="text"><div class="title">${title}</div><div class="desc">${desc}</div></div>
-    <div class="control"><label class="switch"><input type="checkbox" data-setting="${key}" ${S.settings[key] === 'true' ? 'checked' : ''}><span class="track"></span><span class="sr-only"></span></label></div>
+function settingRow(iconName, title, desc, control, cls = '') {
+  return `<div class="setting-row inset-setting ${cls}">
+    <span class="inset-icon">${icon(iconName, 'sm')}</span>
+    <div class="text"><div class="title">${title}</div>${desc ? `<div class="desc">${desc}</div>` : ''}</div>
+    <div class="control">${control}</div>
+  </div>`;
+}
+
+function settingSwitch(key, title, desc, iconName = 'settings') {
+  return settingRow(iconName, title, desc,
+    `<label class="switch"><input type="checkbox" data-setting="${key}" ${S.settings[key] === 'true' ? 'checked' : ''}><span class="track"></span><span class="sr-only"></span></label>`);
+}
+
+function insetRow({ action = '', iconName = 'settings', title, desc = '', right = '', chevron = true, danger = false }) {
+  const tag = action ? 'button' : 'div';
+  return `<${tag} class="inset-row${danger ? ' danger' : ''}" ${action ? `data-action="${action}"` : ''}>
+    <span class="inset-icon">${icon(iconName, 'sm')}</span>
+    <span class="inset-main"><span class="inset-title">${title}</span>${desc ? `<span class="inset-desc">${desc}</span>` : ''}</span>
+    ${right ? `<span class="inset-control">${right}</span>` : ''}
+    ${chevron ? `<span class="inset-chevron">${icon('chevron', 'sm')}</span>` : ''}
+  </${tag}>`;
+}
+
+function settingsGroup(title, rows, sub = '') {
+  return `<section class="settings-group">
+    <div class="settings-group-head"><h2>${title}</h2>${sub ? `<p>${sub}</p>` : ''}</div>
+    <div class="inset-list">${rows}</div>
+  </section>`;
+}
+
+function profileCount(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? String(n) : '—';
+}
+
+function settingsProfile(a) {
+  const p = S.profile || {};
+  const signed = !!a.signedIn;
+  const name = p.name || a.login || '未登录';
+  const handle = signed ? '@' + (p.login || a.login || '') : '登录后同步 GitHub 账号';
+  const repo = signed ? profileCount(p.publicRepos) : '—';
+  const followers = signed ? profileCount(p.followers) : '—';
+  const following = signed ? profileCount(p.following) : '—';
+  const ratePct = a.rateLimit && a.rateLimit.limit
+    ? clamp((Number(a.rateLimit.remaining || 0) / Number(a.rateLimit.limit || 1)) * 100, 0, 100) : 0;
+  const reset = a.rateLimit && a.rateLimit.reset
+    ? new Date(a.rateLimit.reset).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '—';
+  return `<section class="profile-hero">
+    <div class="profile-top">
+      <button class="profile-avatar" data-action="${signed ? 'profile-open' : 'login'}" aria-label="${signed ? '查看个人资料' : '登录 GitHub'}">${avatarHtml({ owner: a.login || name, avatarUrl: p.avatarUrl || '' }, 'xl')}</button>
+      <button class="profile-id" data-action="${signed ? 'profile-open' : 'login'}">
+        <span class="profile-name">${esc(name)}</span>
+        <span class="profile-handle">${esc(handle)}</span>
+        <span class="profile-note">${signed ? (a.hasEnvToken ? '环境变量令牌 · 仅本次会话' : a.tokenPersisted ? '已安全保存在 Windows 凭据管理器' : '仅本次会话') : '匿名访问受 60 次/小时限制'}</span>
+      </button>
+      <div class="profile-actions">
+        ${signed
+          ? `<button class="btn outlined small" data-action="logout">退出登录</button><button class="btn text small" data-action="login-device">切换账号</button>`
+          : `<button class="btn filled small" data-action="login">登录 GitHub</button><button class="btn text small" data-action="login-device">设备码登录</button>`}
+      </div>
+    </div>
+    <div class="profile-stats">
+      <button class="profile-stat" ${signed ? 'data-action="profile-open"' : ''}><strong>${repo}</strong><span>仓库</span></button>
+      <div class="profile-stat"><strong>${followers}</strong><span>关注者</span></div>
+      <div class="profile-stat"><strong>${following}</strong><span>正在关注</span></div>
+    </div>
+    <div class="profile-quota">
+      <div class="profile-quota-head"><span>API 配额</span><span>${Number((a.rateLimit && a.rateLimit.remaining) || 0)}/${Number((a.rateLimit && a.rateLimit.limit) || 0)} · 重置 ${esc(reset)}</span></div>
+      <div class="rate-meter"><i style="width:${ratePct}%"></i></div>
+    </div>
+  </section>`;
+}
+
+function renderSettingsHub() {
+  const a = S.auth || {};
+  const signed = !!a.signedIn;
+  const installs = (S.installs || []).length;
+  const active = (S.downloads || []).filter((j) => ['queued', 'downloading', 'verifying', 'installing'].includes(j.status)).length;
+  const finished = (S.downloads || []).filter((j) => ['done', 'unverified', 'failed', 'canceled'].includes(j.status)).length;
+  const starsHref = a.login ? `https://github.com/${encodeURIComponent(a.login)}?tab=stars` : 'https://github.com/stars';
+  return `<div class="settings-page">
+    <div class="settings-header">
+      <div><h1>个人资料</h1><div class="sub">账户、资料库、更新与应用设置。</div></div>
+      <span class="badge ${signed ? 'primary' : 'outline'}">${signed ? '已登录 ' + esc(a.login || '') : '未登录'}</span>
+    </div>
+    ${settingsProfile(a)}
+    ${settingsGroup('资料库',
+      insetRow({ action: 'nav-library', iconName: 'apps', title: '应用库', desc: installs ? `${installs} 个应用已纳入管理，查看安装位置和更新状态` : '还没有安装应用，从发现页开始' }) +
+      insetRow({ action: 'nav-downloads', iconName: 'download', title: '下载', desc: active ? `${active} 个任务进行中，${finished} 个已完成` : `${finished} 个已完成，暂无进行中的任务` }) +
+      insetRow({ action: 'open-stars', iconName: 'star', title: '星标', desc: '在 GitHub 上查看你加星的仓库' }),
+    '安装、下载与收藏')}
+    ${settingsGroup('更新',
+      insetRow({ action: 'release-notes', iconName: 'refresh', title: '更新内容', desc: `Komi Go ${esc(a.version || '')} · 最近版本的亮点` }) +
+      insetRow({ action: 'announcements', iconName: 'inbox', title: '公告', desc: '资讯、调查和重要通知' }),
+    '版本与公告')}
+    ${settingsGroup('应用',
+      insetRow({ action: 'settings-general', iconName: 'settings', title: '调整', desc: '应用设置、主题、网络、高级选项' }) +
+      insetRow({ action: 'about-app', iconName: 'info', title: '关于', desc: '版本、社区、法律与数据目录' }),
+    '个性化 Komi Go')}
+    ${settingsGroup('账户',
+      signed
+        ? insetRow({ action: 'logout', iconName: 'power', title: '退出登录', desc: '从 Windows 凭据管理器删除令牌', danger: true, chevron: false })
+        : insetRow({ action: 'login', iconName: 'key', title: '登录 GitHub', desc: '提升 API 配额，访问私有仓库与星标', chevron: false }),
+    signed ? '' : '登录后同步你的 GitHub 资料')}
+  </div>`;
+}
+
+function installedRepoKeys() {
+  return new Set((S.installs || []).map((x) => `${String(x.owner || '').toLowerCase()}/${String(x.repo || '').toLowerCase()}`));
+}
+
+function profileFilteredRepos() {
+  const all = S.profileRepos || [];
+  const q = String(S.profileQuery || '').trim().toLowerCase();
+  const installed = installedRepoKeys();
+  return all.filter((r) => {
+    if (S.profileFilter === 'windows' && !(r.platforms || []).includes('windows')) return false;
+    if (S.profileFilter === 'installed' && !installed.has(`${String(r.owner || '').toLowerCase()}/${String(r.name || '').toLowerCase()}`)) return false;
+    if (!q) return true;
+    return `${r.name || ''} ${r.description || ''} ${r.language || ''} ${r.latestTag || ''}`.toLowerCase().includes(q);
+  });
+}
+
+function profileRepoCard(r) {
+  return `<article class="profile-repo-card">
+    <button class="profile-repo-hit" data-action="profile-open-repo" data-owner="${esc(r.owner)}" data-name="${esc(r.name)}">
+      <div class="profile-repo-head">
+        <div class="profile-repo-title"><strong>${esc(r.name)}</strong><span>${esc(r.latestTag || r.latestName || 'Latest')} · 发布于 ${esc(timeAgo(r.publishedAt) || '—')}</span></div>
+        ${r.private ? '<span class="badge outline">私有</span>' : ''}
+      </div>
+      <p class="profile-repo-desc">${esc(r.description || '这个仓库还没有填写简介。')}</p>
+      <div class="profile-repo-meta">
+        <span class="meta">${icon('star')} ${fmtCount(r.stars)}</span>
+        ${r.language ? `<span class="meta">${icon('code')} ${esc(r.language)}</span>` : ''}
+        ${platformChips(r, true)}
+      </div>
+    </button>
+  </article>`;
+}
+
+function profileRepoListHtml() {
+  if (S.profileReposLoading) {
+    return `<div class="profile-repo-skeleton"></div><div class="profile-repo-skeleton"></div><div class="profile-repo-skeleton"></div>`;
+  }
+  if (S.profileError) {
+    return `<div class="warning">${esc(S.profileError)}</div><div class="modal-actions" style="justify-content:flex-start"><button class="btn outlined small" data-action="profile-repos-retry">重新读取</button></div>`;
+  }
+  const list = profileFilteredRepos();
+  if (!list.length) {
+    return `<div class="empty" style="padding:36px 18px"><div class="art">${icon('inbox', 'lg')}</div><h3>没有匹配的仓库</h3><p>这里只显示带 Release 的仓库；换一个筛选或清空搜索试试。</p></div>`;
+  }
+  return list.map(profileRepoCard).join('');
+}
+
+function profileRepoCountText() {
+  const total = Number((S.profile && S.profile.publicRepos) || 0) || (S.profileRepos || []).length;
+  return `显示 ${profileFilteredRepos().length} 个中的 ${total} 个仓库`;
+}
+
+function renderProfileRepoList() {
+  const list = $('#profileRepoList');
+  if (list) list.innerHTML = profileRepoListHtml();
+  const count = $('#profileRepoCount');
+  if (count) count.textContent = profileRepoCountText();
+}
+
+async function ensureProfileRepos(force = false) {
+  if (S.profileReposLoading) return;
+  if (S.profileReposLoaded && !force) return;
+  S.profileReposLoading = true;
+  S.profileError = '';
+  S.profileReposLoaded = false;
+  if (S.route === 'settings' && S.settingsScreen === 'profile') renderSettings();
+  try {
+    S.profileRepos = (await call('ProfileRepos')) || [];
+    S.profileReposLoaded = true;
+  } catch (e) {
+    S.profileError = e && e.message ? e.message : String(e);
+  } finally {
+    S.profileReposLoading = false;
+    if (S.route === 'settings' && S.settingsScreen === 'profile') renderSettings();
+  }
+}
+
+function renderSettingsProfile() {
+  const a = S.auth || {};
+  const filters = [['released', '有发布版'], ['windows', '可在此安装'], ['installed', '已安装']];
+  return `<div class="settings-page profile-page">
+    <div class="settings-header with-back">
+      <button class="icon-btn" data-action="settings-hub" aria-label="返回设置">${icon('back')}</button>
+      <div><h1>${esc(a.login || '个人资料')}</h1><div class="sub">仓库、贡献与发布版本。</div></div>
+    </div>
+    ${settingsProfile(a)}
+    <div class="profile-search-row">
+      <div class="profile-search">${icon('search')}<input id="profileSearch" placeholder="搜索仓库…" value="${esc(S.profileQuery)}" aria-label="搜索仓库"></div>
+    </div>
+    <div class="profile-filter-row">
+      <div class="tab-group">${filters.map(([k, l]) => `<button class="tab" aria-selected="${S.profileFilter === k}" data-action="profile-filter" data-filter="${k}">${l}</button>`).join('')}</div>
+    </div>
+    <div class="profile-repo-count" id="profileRepoCount">${profileRepoCountText()}</div>
+    <div class="profile-repo-list" id="profileRepoList">${profileRepoListHtml()}</div>
+  </div>`;
+}
+
+function renderSettingsGeneral() {
+  const a = S.auth || {};
+  const theme = S.settings.theme || 'system';
+  return `<div class="settings-page">
+    <div class="settings-header with-back">
+      <button class="icon-btn" data-action="settings-hub" aria-label="返回">${icon('back')}</button>
+      <div><h1>调整</h1><div class="sub">应用设置、主题、网络、翻译、高级选项。</div></div>
+    </div>
+    ${settingsGroup('外观',
+      settingRow('settings', '主题', '跟随系统、浅色或深色；切换立即生效。',
+        `<div class="tab-group">${['system', 'light', 'dark'].map((t) => `<button class="tab" aria-selected="${theme === t}" data-action="theme" data-theme="${t}">${{ system: '跟随系统', light: '浅色', dark: '深色' }[t]}</button>`).join('')}</div>`) +
+      settingSwitch('ui.reduce_motion', '减少动效', '关闭按压形变、波浪进度与过渡动画。', 'play'),
+    '决定 Komi Go 的观感与动效')}
+    ${settingsGroup('更新',
+      settingSwitch('update.auto', '自动检查更新', '应用启动后按间隔在后台检查，不自动安装。', 'refresh') +
+      settingRow('refresh', '检查间隔', '1–168 小时。默认 12 小时。',
+        `<input class="input" type="number" min="1" max="168" style="width:96px" data-setting="update.interval" value="${esc(S.settings['update.interval'] || '12')}"><span class="muted small">小时</span>`) +
+      settingSwitch('update.prerelease', '接受预发布', '默认跳过 prerelease 标签与草稿。', 'tag') +
+      settingSwitch('update.fallback_older', '回退到旧版本', '当最新版本没有本机资产时，继续向前找可用版本。', 'skip') +
+      settingRow('filter', '资产过滤', '正则，可选。留空表示接受所有匹配资产；最多 200 字符。',
+        `<input class="input" data-setting="update.filter" value="${esc(S.settings['update.filter'] || '')}" placeholder="例如 portable|setup">`) +
+      settingRow('code', '自更新仓库', '填写发布 Komi Go 安装包的 owner/repo；用于应用自身升级。',
+        `<input class="input" data-setting="self_update.repo" value="${esc(S.settings['self_update.repo'] || '')}" placeholder="owner/repo">`) +
+      settingRow('refresh', '应用更新', S.selfInfo && S.selfInfo.available ? `发现新版本 ${esc(S.selfInfo.latest || '')}` : '检查并下载 Komi Go 的新版本。',
+        `<button class="btn tonal small" data-action="check-self-update">${icon('refresh', 'sm')} 检查</button><button class="btn outlined small" data-action="download-self-update" ${S.selfInfo && S.selfInfo.available ? '' : 'disabled'}>安装</button>`),
+    'Release 检查与应用自身升级')}
+    ${settingsGroup('网络',
+      settingRow('external', '代理', '支持 http/https 代理；留空跟随系统。',
+        `<input class="input" id="proxyInput" value="${esc(S.settings['network.proxy'] || '')}" placeholder="http://127.0.0.1:7890">`) +
+      settingRow('external', '代理操作', '保存后立即应用到后续请求。',
+        `<button class="btn outlined small" data-action="save-proxy">保存代理</button><button class="btn text small" data-action="ping">测试连接</button>`) +
+      settingRow('download', '镜像模式', '自动会在下载前测速并优先延迟最低的镜像。', mirrorModeControl()) +
+      mirrorPanel(),
+    '下载加速与连接方式')}
+    ${settingsGroup('桌面集成',
+      settingSwitch('ui.close_to_tray', '关闭到托盘', '点击关闭按钮时隐藏到托盘，而不是退出。', 'power') +
+      settingRow('power', '开机启动', '写入 HKCU Run，启动时隐藏到托盘。',
+        `<label class="switch"><input type="checkbox" id="autostartSwitch" ${a.autostart ? 'checked' : ''}><span class="track"></span></label>`) +
+      settingRow('external', 'komi:// 协议', '双击链接或从浏览器直接打开仓库页。',
+        `<span class="badge ${a.urlScheme ? 'success' : 'outline'}">${a.urlScheme ? '已注册' : '未注册'}</span><button class="btn outlined small" data-action="register-scheme">注册</button>`),
+    '托盘、启动项与系统链接')}
+    ${settingsGroup('数据',
+      settingRow('inbox', 'HTTP 缓存', `${Number(S.cache.entries || 0)} 条 · ${fmtBytes(S.cache.bytes || 0)}；数据库 ${fmtBytes(S.cache.dbBytes || 0)}`,
+        `<button class="btn outlined small" data-action="clear-cache">清空缓存</button>`) +
+      settingRow('copy', '库备份', '导出 Komi 备份或 Obtainium 兼容列表；导入只建立跟踪，不自动安装。',
+        `<button class="btn outlined small" data-action="export-library">导出</button><button class="btn outlined small" data-action="export-obtainium">Obtainium</button><button class="btn tonal small" data-action="import-library">导入</button>`) +
+      settingRow('apps', '系统应用扫描', '读取“应用和功能”，尝试反查 GitHub 来源仓库。',
+        `<button class="btn outlined small" data-action="scan-external">扫描</button>`),
+    '缓存、备份与本地应用')}
+    ${settingsGroup('关于',
+      settingRow('info', `Komi Go ${esc(a.version || '')}`, 'Go + Wails v2 + SQLite + WebView2 · Material 3 Expressive',
+        `<button class="btn text small" data-action="copy-diagnostics">复制诊断</button><button class="btn text small" data-action="open-logs">日志</button>`) +
+      settingRow('folder', '数据目录', `<span class="mono" style="font-size:11px">${esc(a.dataDir || '')}</span>`,
+        `<button class="icon-btn" data-action="open-data" data-tip="打开数据目录" aria-label="打开数据目录">${icon('folder')}</button>`),
+    '版本与本地数据')}
   </div>`;
 }
 
@@ -1084,142 +1348,46 @@ function mirrorRows() {
   }).join('');
 }
 
+function mirrorModeControl() {
+  return `<select class="input" id="mirrorMode" data-action="mirror-mode">
+    <option value="auto" ${(S.settings['network.mirrorSelected'] || 'auto') === 'auto' ? 'selected' : ''}>自动 · 延迟最低</option>
+    <option value="direct" ${S.settings['network.mirrorSelected'] === 'direct' ? 'selected' : ''}>不使用镜像 · 直连</option>
+    ${mirrorConfig().map((m) => `<option value="${esc(m.template)}" ${S.settings['network.mirrorSelected'] === m.template ? 'selected' : ''}>${esc(m.name || m.template)}${m.api ? ' · 支持 API' : ''}</option>`).join('')}
+  </select>`;
+}
+
+function mirrorPanel() {
+  return `<div class="settings-subpanel">
+    <div class="mirror-panel">
+      <div class="mirror-head">
+        <div><span class="title">镜像站</span> <span class="badge outline">${mirrorConfig().length}</span></div>
+        <button class="btn tonal small" data-action="test-mirrors" ${S.mirrorTesting ? 'disabled' : ''}>${icon('refresh', 'sm')} ${S.mirrorTesting ? '测速中…' : '测速'}</button>
+      </div>
+      <div class="mirror-list">${mirrorRows()}</div>
+      <p class="tiny muted">内置 NxNow、MonkeyRay、GeekerTao、GHProxy.net、GHFast、LLKK；GitHub 直连始终作为回退源。镜像只代理资产下载，API 请求仍直连上游聚合服务。</p>
+      <details class="mirror-editor">
+        <summary>编辑镜像配置（JSON）</summary>
+        <textarea class="textarea" id="mirrorsInput" placeholder='[{"name":"镜像","template":"https://mirror.example/{url}"}]'>${esc(S.settings['network.mirrors'] || '')}</textarea>
+        <div class="modal-actions" style="justify-content:flex-start;margin-top:8px"><button class="btn outlined small" data-action="save-mirrors">保存镜像</button></div>
+      </details>
+    </div>
+  </div>`;
+}
+
 function renderSettings() {
   const main = $('#main');
   const scroll = main.scrollTop;
-  const a = S.auth || {};
-  const rl = a.rateLimit || {};
-  const ratePct = rl.limit ? clamp((rl.remaining / rl.limit) * 100, 0, 100) : 0;
-  const theme = S.settings.theme || 'system';
-  main.innerHTML = `
-    <div class="page-head"><div><h1>设置</h1><div class="sub">账户、更新、网络、桌面集成与数据管理。</div></div>
-      <div class="page-actions"><span class="badge ${a.signedIn ? 'primary' : 'outline'}">${a.signedIn ? '已登录 ' + esc(a.login || '') : '未登录'}</span></div>
-    </div>
-    <div class="settings-grid">
-      <section class="card settings-section">
-        <div class="head"><span class="badge primary">${icon('key', 'sm')}</span><h2>账户</h2></div>
-        <div class="hint">令牌写入 Windows 凭据管理器，不落在明文文件里；设备码登录不会让客户端持有 secret。</div>
-        <div class="account-card">
-          ${avatarHtml({ owner: a.login || 'K', avatarUrl: '' }, 'lg')}
-          <div><div class="who">${esc(a.login || '未登录')}</div>
-          <div class="sub">${a.signedIn ? (a.hasEnvToken ? '环境变量令牌（不持久化）' : a.tokenPersisted ? '已保存到凭据管理器' : '仅本次会话') : '匿名访问受 60 次/小时限制'}</div>
-          <div class="rate-meter" title="GitHub API 配额"><i style="width:${ratePct}%"></i></div>
-          <div class="tiny muted" style="margin-top:3px">API 配额 ${Number(rl.remaining || 0)}/${Number(rl.limit || 0)} · 重置 ${esc(rl.reset ? new Date(rl.reset).toLocaleTimeString('zh-CN') : '—')}</div></div>
-          <div class="hstack">
-            ${a.signedIn ? `<button class="btn outlined" data-action="logout">退出登录</button>` : `<button class="btn filled" data-action="login">登录 GitHub</button>`}
-            <button class="btn text" data-action="login-device">设备码登录</button>
-          </div>
-        </div>
-      </section>
-
-      <section class="card settings-section">
-        <div class="head"><span class="badge tertiary">${icon('settings', 'sm')}</span><h2>外观</h2></div>
-        <div class="setting-row">
-          <div class="text"><div class="title">主题</div><div class="desc">跟随系统、浅色或深色；切换立即生效。</div></div>
-          <div class="control"><div class="tab-group">
-            ${['system', 'light', 'dark'].map((t) => `<button class="tab" aria-selected="${theme === t}" data-action="theme" data-theme="${t}">${{ system: '跟随系统', light: '浅色', dark: '深色' }[t]}</button>`).join('')}
-          </div></div>
-        </div>
-        ${settingSwitch('ui.reduce_motion', '减少动效', '关闭按压形变、波浪进度与过渡动画。')}
-      </section>
-
-      <section class="card settings-section">
-        <div class="head"><span class="badge primary">${icon('refresh', 'sm')}</span><h2>更新</h2></div>
-        ${settingSwitch('update.auto', '自动检查更新', '应用启动后按间隔在后台检查，不自动安装。')}
-        <div class="setting-row">
-          <div class="text"><div class="title">检查间隔</div><div class="desc">1–168 小时。默认 12 小时。</div></div>
-          <div class="control"><input class="input" type="number" min="1" max="168" style="width:110px" data-setting="update.interval" value="${esc(S.settings['update.interval'] || '12')}"><span class="muted small">小时</span></div>
-        </div>
-        ${settingSwitch('update.prerelease', '接受预发布', '默认跳过 prerelease 标签与草稿。')}
-        ${settingSwitch('update.fallback_older', '回退到旧版本', '当最新版本没有本机资产时，继续向前找可用版本。')}
-        <div class="setting-row">
-          <div class="text"><div class="title">资产过滤</div><div class="desc">正则，可选。留空表示接受所有匹配资产；最多 200 字符。</div></div>
-          <div class="control" style="width:min(360px,50%)"><input class="input" data-setting="update.filter" value="${esc(S.settings['update.filter'] || '')}" placeholder="例如 portable|setup"></div>
-        </div>
-        <div class="setting-row">
-          <div class="text"><div class="title">自更新仓库</div><div class="desc">填写发布 Komi Go 安装包的 owner/repo；用于应用自身升级。</div></div>
-          <div class="control" style="width:min(360px,50%)"><input class="input" data-setting="self_update.repo" value="${esc(S.settings['self_update.repo'] || '')}" placeholder="owner/repo"></div>
-        </div>
-        <div class="modal-actions" style="justify-content:flex-start;margin-top:10px">
-          <button class="btn tonal small" data-action="check-self-update">${icon('refresh', 'sm')} 检查应用更新</button>
-          <button class="btn outlined small" data-action="download-self-update" ${S.selfInfo && S.selfInfo.available ? '' : 'disabled'}>${icon('download', 'sm')} 下载并安装</button>
-          ${S.selfInfo && S.selfInfo.available ? `<span class="badge primary">${esc(S.selfInfo.latest || '')}</span>` : ''}
-        </div>
-      </section>
-
-      <section class="card settings-section">
-        <div class="head"><span class="badge tertiary">${icon('external', 'sm')}</span><h2>网络</h2></div>
-        <div class="setting-row">
-          <div class="text"><div class="title">代理</div><div class="desc">支持 http/https 代理，例如 http://127.0.0.1:7890；留空跟随系统。</div></div>
-          <div class="control" style="width:min(360px,50%)"><input class="input" id="proxyInput" value="${esc(S.settings['network.proxy'] || '')}" placeholder="http://127.0.0.1:7890"></div>
-        </div>
-        <div class="modal-actions" style="justify-content:flex-start;margin-top:0">
-          <button class="btn outlined small" data-action="save-proxy">保存代理</button>
-          <button class="btn text small" data-action="ping">${icon('refresh', 'sm')} 测试连接</button>
-        </div>
-        <div class="setting-row">
-          <div class="text"><div class="title">镜像模式</div><div class="desc">选择“自动”会在下载前测速并优先延迟最低的镜像；也可固定某一个镜像，或完全直连。README 图片与安装包都走同一镜像。</div></div>
-          <div class="control" style="width:min(360px,52%)">
-            <select class="input" id="mirrorMode" data-action="mirror-mode">
-              <option value="auto" ${(S.settings['network.mirrorSelected'] || 'auto') === 'auto' ? 'selected' : ''}>自动 · 延迟最低</option>
-              <option value="direct" ${S.settings['network.mirrorSelected'] === 'direct' ? 'selected' : ''}>不使用镜像 · 直连</option>
-              ${mirrorConfig().map((m) => `<option value="${esc(m.template)}" ${S.settings['network.mirrorSelected'] === m.template ? 'selected' : ''}>${esc(m.name || m.template)}${m.api ? ' · 支持 API' : ''}</option>`).join('')}
-            </select>
-          </div>
-        </div>
-        <div class="mirror-panel">
-          <div class="mirror-head">
-            <div><span class="title">镜像站</span> <span class="badge outline">${mirrorConfig().length}</span></div>
-            <button class="btn tonal small" data-action="test-mirrors" ${S.mirrorTesting ? 'disabled' : ''}>${icon('refresh', 'sm')} ${S.mirrorTesting ? '测速中…' : '测速'}</button>
-          </div>
-          <div class="mirror-list">${mirrorRows()}</div>
-          <p class="tiny muted">内置 NxNow、MonkeyRay、GeekerTao、GHProxy.net、GHFast、LLKK；GitHub 直连始终作为回退源。镜像只代理资产下载，API 请求仍直连上游聚合服务。</p>
-          <details class="mirror-editor">
-            <summary>编辑镜像配置（JSON）</summary>
-            <textarea class="textarea" id="mirrorsInput" placeholder='[{"name":"镜像","template":"https://mirror.example/{url}"}]'>${esc(S.settings['network.mirrors'] || '')}</textarea>
-            <div class="modal-actions" style="justify-content:flex-start;margin-top:8px"><button class="btn outlined small" data-action="save-mirrors">保存镜像</button></div>
-          </details>
-        </div>
-      </section>
-
-      <section class="card settings-section">
-        <div class="head"><span class="badge tertiary">${icon('power', 'sm')}</span><h2>桌面集成</h2></div>
-        ${settingSwitch('ui.close_to_tray', '关闭到托盘', '点击关闭按钮时隐藏到托盘，而不是退出。')}
-        <div class="setting-row">
-          <div class="text"><div class="title">开机启动</div><div class="desc">写入 HKCU Run，启动时隐藏到托盘。</div></div>
-          <div class="control"><label class="switch"><input type="checkbox" id="autostartSwitch" ${a.autostart ? 'checked' : ''}><span class="track"></span></label></div>
-        </div>
-        <div class="setting-row">
-          <div class="text"><div class="title">komi:// 协议</div><div class="desc">双击链接或从浏览器直接打开仓库页。</div></div>
-          <div class="control"><span class="badge ${a.urlScheme ? 'success' : 'outline'}">${a.urlScheme ? '已注册' : '未注册'}</span><button class="btn outlined small" data-action="register-scheme">注册</button></div>
-        </div>
-      </section>
-
-      <section class="card settings-section">
-        <div class="head"><span class="badge tertiary">${icon('inbox', 'sm')}</span><h2>数据</h2></div>
-        <div class="setting-row">
-          <div class="text"><div class="title">HTTP 缓存</div><div class="desc">${Number(S.cache.entries || 0)} 条 · ${fmtBytes(S.cache.bytes || 0)}；数据库 ${fmtBytes(S.cache.dbBytes || 0)}</div></div>
-          <div class="control"><button class="btn outlined small" data-action="clear-cache">清空缓存</button></div>
-        </div>
-        <div class="setting-row">
-          <div class="text"><div class="title">库备份</div><div class="desc">导出 Komi 备份或 Obtainium 兼容列表；导入只建立跟踪，不自动安装。</div></div>
-          <div class="control"><button class="btn outlined small" data-action="export-library">导出</button><button class="btn outlined small" data-action="export-obtainium">Obtainium</button><button class="btn tonal small" data-action="import-library">导入</button></div>
-        </div>
-        <div class="setting-row">
-          <div class="text"><div class="title">系统应用扫描</div><div class="desc">读取“应用和功能”，尝试反查 GitHub 来源仓库。</div></div>
-          <div class="control"><button class="btn outlined small" data-action="scan-external">扫描</button></div>
-        </div>
-      </section>
-
-      <section class="card settings-section">
-        <div class="head"><span class="badge outline">${icon('info', 'sm')}</span><h2>关于</h2></div>
-        <div class="setting-row"><div class="text"><div class="title">Komi Go ${esc(a.version || '')}</div><div class="desc">Go + Wails v2 + SQLite + WebView2 · Material 3 Expressive</div></div>
-          <div class="control"><button class="btn text small" data-action="copy-diagnostics">复制诊断</button><button class="btn text small" data-action="open-logs">日志</button></div></div>
-        <div class="setting-row"><div class="text"><div class="title">数据目录</div><div class="desc mono" style="font-size:11px">${esc(a.dataDir || '')}</div></div>
-          <div class="control"><button class="icon-btn" data-action="open-data" data-tip="打开数据目录" aria-label="打开数据目录">${icon('folder')}</button></div></div>
-      </section>
-    </div>`;
+  main.innerHTML = S.settingsScreen === 'general'
+    ? renderSettingsGeneral()
+    : S.settingsScreen === 'profile'
+      ? renderSettingsProfile()
+      : renderSettingsHub();
   main.scrollTop = scroll;
+  const search = $('#profileSearch');
+  if (search) search.addEventListener('input', (e) => {
+    S.profileQuery = e.target.value;
+    renderProfileRepoList();
+  });
   const auto = $('#autostartSwitch');
   if (auto) auto.addEventListener('change', async () => {
     try { await call('SetAutostart', auto.checked); S.auth.autostart = auto.checked; toast(auto.checked ? '已开启开机启动' : '已关闭开机启动', 'success'); }
@@ -1228,10 +1396,14 @@ function renderSettings() {
 }
 
 async function loadSettingsPage() {
-  await loadSettings();
-  await loadAuth();
-  await loadCache();
+  await Promise.all([loadSettings(), loadAuth(), loadCache()]);
+  await loadProfile();
   renderSettings();
+}
+
+async function loadProfile() {
+  if (!S.auth || !S.auth.signedIn) { S.profile = {}; return; }
+  try { S.profile = (await call('Profile')) || {}; } catch (_) { S.profile = {}; }
 }
 
 /* ------------------------------------------------------------------ modals */
@@ -1391,9 +1563,8 @@ async function loginModal(mode = 'pat') {
       <button class="tab" aria-selected="${mode === 'device'}" data-action="login-tab" data-mode="device">设备码</button>
     </div>
     ${mode === 'device' ? `
-      <div class="field" style="margin-bottom:12px"><label>OAuth App client_id</label><input class="input" id="clientIdInput" value="${esc(S.settings['github.client_id'] || '')}" placeholder="在 GitHub → Settings → Developer settings 创建 OAuth App"></div>
-      <div class="note">设备码登录不需要 client_secret；先在 GitHub 创建 OAuth App，勾选 Device Flow，然后把 client_id 填进来。</div>
-      <div class="modal-actions"><button class="btn filled" id="deviceStart">开始设备码授权</button></div>
+      <div class="note" style="margin-bottom:12px">已内置 Komi Go 的 OAuth App，无需填写 client_id。点击开始后，把生成的 8 位代码填到 GitHub 授权页即可登录。</div>
+      <div class="modal-actions"><button class="btn filled" id="deviceStart">生成设备码</button></div>
       <div id="deviceArea"></div>`
     : `
       <div class="field"><label>Fine-grained / classic token</label><input class="input mono" id="tokenInput" type="password" placeholder="ghp_… 或 github_pat_…" autocomplete="off"></div>
@@ -1407,25 +1578,24 @@ async function loginModal(mode = 'pat') {
     try {
       const login = await call('SetToken', token);
       toast(`已登录：${login}`, 'success');
-      closeModal(); await loadAuth(); await loadSettings(); if (S.route === 'settings') renderSettings();
+      closeModal(); await loadAuth(); await loadProfile(); await loadSettings(); if (S.route === 'settings') renderSettings();
     } catch (e) { notifyError(e); }
     finally { busyOff(); }
   };
   const start = $('#deviceStart');
   if (start) start.onclick = startDeviceFlow;
+  if (mode === 'device') startDeviceFlow();
 }
 
 async function startDeviceFlow() {
-  const clientId = ($('#clientIdInput') || {}).value || '';
-  if (clientId.trim()) {
-    try { await call('SetSetting', 'github.client_id', clientId.trim()); S.settings['github.client_id'] = clientId.trim(); } catch (e) { notifyError(e); return; }
-  }
   busyOn();
   try {
     const flow = await call('StartDeviceFlow');
     const code = flow.device_code || flow.deviceCode;
     const userCode = flow.user_code || flow.userCode;
     const verifyUrl = flow.verification_uri || flow.verificationURI || 'https://github.com/login/device';
+    const bareCode = String(userCode || '').replace(/[^A-Za-z0-9]/g, '');
+    const openUrl = verifyUrl + (verifyUrl.includes('?') ? '&' : '?') + 'user_code=' + encodeURIComponent(bareCode);
     const expires = Number(flow.expires_in || flow.expiresIn || 900);
     deviceSession = { code, interval: Math.max(5, Number(flow.interval || 5)) * 1000 };
     const area = $('#deviceArea');
@@ -1436,12 +1606,12 @@ async function startDeviceFlow() {
           <div style="font-size:30px;font-weight:700;letter-spacing:4px;font-family:var(--mono);margin:8px 0">${esc(userCode)}</div>
           <div class="hstack" style="justify-content:center;flex-wrap:wrap">
             <button class="btn tonal small" id="copyCode">复制代码</button>
-            <button class="btn outlined small" data-action="open-device-url" data-url="${esc(verifyUrl)}">打开授权页</button>
+            <button class="btn outlined small" data-action="open-device-url" data-url="${esc(openUrl)}">打开授权页</button>
           </div>
-          <div class="tiny muted" style="margin-top:10px">有效期 ${expires / 60} 分钟，窗口关闭即取消轮询。</div>
+          <div class="tiny muted" style="margin-top:10px">有效期 ${Math.max(1, Math.round(expires / 60))} 分钟，窗口关闭即取消轮询。</div>
         </div>`;
       const copy = $('#copyCode');
-      if (copy) copy.onclick = () => copyText(userCode, '授权码已复制');
+      if (copy) copy.onclick = () => copyText(bareCode, '授权码已复制');
     }
     pollDevice();
   } catch (e) { notifyError(e); }
@@ -1454,13 +1624,27 @@ async function pollDevice() {
     const res = await call('PollDeviceFlow', deviceSession.code);
     if (res && res.pending) {
       if (res.slowDown) deviceSession.interval += 5000;
+      deviceSession.errors = 0;
       deviceTimer = setTimeout(pollDevice, deviceSession.interval);
       return;
     }
     toast(`设备码登录成功：${res.login || ''}`, 'success');
     closeModal();
-    await loadAuth(); await loadSettings(); if (S.route === 'settings') renderSettings();
+    await loadAuth(); await loadProfile(); await loadSettings(); if (S.route === 'settings') renderSettings();
   } catch (e) {
+    const msg = String((e && (e.message || e.error || e)) || '').toLowerCase();
+    const terminal = ['access_denied', 'expired_token', 'expired_device_code', 'bad_verification_code', 'incorrect_device_code', 'device_flow_disabled']
+      .some((k) => msg.includes(k));
+    if (terminal) {
+      notifyError(new Error('授权已失效，请重新生成设备码：' + (e.message || e)));
+      return;
+    }
+    deviceSession.errors = (deviceSession.errors || 0) + 1;
+    if (deviceSession.errors <= 5) {
+      const backoff = Math.min(Math.max(deviceSession.interval, 5000) * deviceSession.errors, 30000);
+      deviceTimer = setTimeout(pollDevice, backoff);
+      return;
+    }
     notifyError(e);
   }
 }
@@ -1542,13 +1726,24 @@ function openImportPreview(report, applied) {
 
 async function copyText(text, okMsg = '已复制') {
   try {
+    let copied = false;
     if (navigator.clipboard && navigator.clipboard.writeText) {
-      await navigator.clipboard.writeText(text);
-    } else {
-      const ta = document.createElement('textarea');
-      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
-      document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
+      try {
+        await navigator.clipboard.writeText(text);
+        copied = true;
+      } catch (_) { /* WebView2 may deny clipboard without focus; fall back below */ }
     }
+    if (!copied) {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      copied = document.execCommand('copy');
+      ta.remove();
+    }
+    if (!copied) throw new Error('剪贴板不可用');
     toast(okMsg, 'success');
   } catch (e) { notifyError(new Error('复制失败：' + (e.message || e))); }
 }
@@ -1664,7 +1859,11 @@ async function onGlobalClick(e) {
     return;
   }
   const action = el.dataset.action;
-  if (action === 'scrim') { closeModal(); return; }
+  if (action === 'scrim') {
+    if (e.target.closest && e.target.closest('.modal')) return;
+    closeModal();
+    return;
+  }
   if (action === 'close-modal') { closeModal(); return; }
   if (action === 'win-min') { call('WindowMinimise').catch(() => {}); return; }
   if (action === 'win-max') { call('WindowMaximise').catch(() => {}); return; }
@@ -1875,13 +2074,63 @@ async function onGlobalClick(e) {
         break;
       }
       case 'login': await loginModal('pat'); break;
+      case 'settings-general': S.settingsScreen = 'general'; renderSettings(); $('#main').scrollTop = 0; break;
+      case 'settings-hub': S.settingsScreen = 'hub'; renderSettings(); $('#main').scrollTop = 0; break;
+      case 'profile-open': {
+        if (!(S.auth && S.auth.signedIn)) { await loginModal('pat'); break; }
+        S.settingsScreen = 'profile'; renderSettings(); $('#main').scrollTop = 0;
+        ensureProfileRepos();
+        break;
+      }
+      case 'profile-filter': S.profileFilter = el.dataset.filter || 'released'; renderSettings(); break;
+      case 'profile-repos-retry': S.profileReposLoaded = false; ensureProfileRepos(true); break;
+      case 'profile-open-repo': await openRepo('github.com', el.dataset.owner, el.dataset.name); break;
+      case 'nav-library': navigate('library'); break;
+      case 'nav-downloads': navigate('downloads'); break;
+      case 'open-stars': {
+        if (!(S.auth && S.auth.signedIn)) { toast('请先登录 GitHub', 'error'); break; }
+        await call('OpenExternal', `https://github.com/${S.auth.login || ''}?tab=stars`);
+        break;
+      }
+      case 'about-app': {
+        openModal(`<div class="modal-head"><div><div class="modal-title">关于 Komi Go</div><div class="modal-sub">GitHub Release 应用商店 · Windows 桌面端</div></div><button class="icon-btn" data-action="close-modal" aria-label="关闭">${icon('close')}</button></div>
+          <div class="about-list">
+            <div><span>版本</span><strong>${esc((S.auth && S.auth.version) || '')}</strong></div>
+            <div><span>技术栈</span><strong>Go · Wails v2 · SQLite · WebView2</strong></div>
+            <div><span>界面</span><strong>Material 3 Expressive</strong></div>
+            <div><span>仓库</span><strong>Destroyer236/komi-go</strong></div>
+            <div><span>数据目录</span><strong class="mono">${esc((S.auth && S.auth.dataDir) || '')}</strong></div>
+          </div>
+          <div class="modal-actions"><button class="btn text" data-action="close-modal">关闭</button><button class="btn outlined" data-action="open-repo">打开 GitHub 仓库</button></div>`, 'narrow');
+        break;
+      }
+      case 'open-repo': await call('OpenExternal', 'https://github.com/Destroyer236/komi-go'); break;
+      case 'release-notes': {
+        openModal(`<div class="modal-head"><div><div class="modal-title">更新内容</div><div class="modal-sub">Komi Go ${esc((S.auth && S.auth.version) || '')} · 最近版本</div></div><button class="icon-btn" data-action="close-modal" aria-label="关闭">${icon('close')}</button></div>
+          <div class="release-list">
+            <div class="release-item"><span class="release-dot"></span><div><strong>设备码登录开箱可用</strong><p>内置 OAuth App，复制 8 位授权码后弹窗保持打开，轮询会跨瞬时网络错误继续。</p></div></div>
+            <div class="release-item"><span class="release-dot"></span><div><strong>详情页选择器</strong><p>平台、稳定/预发布通道、资源与版本集中在一个紧凑选择器中。</p></div></div>
+            <div class="release-item"><span class="release-dot"></span><div><strong>API 配额实时刷新</strong><p>设置页直接读取 GitHub rate_limit，不再依赖镜像响应头。</p></div></div>
+            <div class="release-item"><span class="release-dot"></span><div><strong>设置页重构</strong><p>个人资料、资料库、更新、应用与账户按分组列表组织。</p></div></div>
+          </div>
+          <div class="modal-actions"><button class="btn text" data-action="close-modal">关闭</button><button class="btn filled" data-action="check-self-update">检查应用更新</button></div>`, 'narrow');
+        break;
+      }
+      case 'announcements': {
+        openModal(`<div class="modal-head"><div><div class="modal-title">公告</div><div class="modal-sub">Komi Go 的使用提示与重要通知</div></div><button class="icon-btn" data-action="close-modal" aria-label="关闭">${icon('close')}</button></div>
+          <div class="note" style="margin-bottom:12px">令牌保存在 Windows 凭据管理器，设备码流程不会让客户端持有 client secret。</div>
+          <div class="note" style="margin-bottom:12px">下载镜像只代理资产文件，API 请求仍直连 GitHub；遇到限流时可在设置里等待配额重置。</div>
+          <div class="note">安装包会请求 Windows 自己的权限确认，Komi Go 不会静默提权。</div>
+          <div class="modal-actions"><button class="btn text" data-action="close-modal">知道了</button></div>`, 'narrow');
+        break;
+      }
       case 'account': if (S.auth && S.auth.signedIn) navigate('settings'); else await loginModal('pat'); break;
       case 'login-device': await loginModal('device'); break;
       case 'login-tab': await loginModal(el.dataset.mode); break;
       case 'logout': {
         confirmDialog({
           title: '退出登录', body: '会从 Windows 凭据管理器删除令牌。', confirm: '退出', danger: true,
-          onConfirm: async () => { await call('ClearToken'); await loadAuth(); if (S.route === 'settings') renderSettings(); },
+          onConfirm: async () => { await call('ClearToken'); S.profile = {}; S.profileRepos = []; S.profileReposLoaded = false; await loadAuth(); if (S.route === 'settings') renderSettings(); },
         });
         break;
       }
@@ -2031,7 +2280,13 @@ async function onGlobalChange(e) {
 
 function bindBackendEvents() {
   onEvent('app:ready', (payload) => { if (payload) { S.auth = payload; updateRail(); } });
-  onEvent('auth:changed', (payload) => { S.auth = payload || S.auth; updateRail(); if (S.route === 'settings') renderSettings(); });
+  onEvent('auth:changed', async (payload) => {
+    S.auth = payload || S.auth;
+    S.profileReposLoaded = false;
+    S.profileRepos = [];
+    updateRail();
+    if (S.route === 'settings') { await loadProfile(); renderSettings(); }
+  });
   onEvent('auth:expired', (msg) => { toast(msg || '登录已失效', 'error'); loadAuth(); });
   onEvent('auth:warning', (msg) => toast(msg));
   onEvent('settings:changed', (payload) => { if (payload) Object.assign(S.settings, payload); });

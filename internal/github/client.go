@@ -525,7 +525,19 @@ func (c *Client) doJSON(ctx context.Context, method, path string, q url.Values, 
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	return c.execute(req, "application/vnd.github+json", "")
+	res, err := c.execute(req, "application/vnd.github+json", "")
+	if err != nil {
+		return res, err
+	}
+	if res.err != nil {
+		return res, res.err
+	}
+	if out != nil && len(res.body) > 0 {
+		if err := json.Unmarshal(res.body, out); err != nil {
+			return res, &Error{Status: 500, Code: "E_PARSE", Message: "无法解析 GitHub 返回的数据"}
+		}
+	}
+	return res, nil
 }
 
 func netError(err error) error {
@@ -853,6 +865,77 @@ func (c *Client) Search(ctx context.Context, query string, page, perPage int, so
 		repos = append(repos, d.toInfo(c.host))
 	}
 	return repos, out.meta, nil
+}
+
+// UserRepo is one repository owned by the signed-in account.
+type UserRepo struct {
+	Name            string    `json:"name"`
+	FullName        string    `json:"full_name"`
+	Description     string    `json:"description"`
+	Language        string    `json:"language"`
+	HTMLURL         string    `json:"html_url"`
+	DefaultBranch   string    `json:"default_branch"`
+	StargazersCount int       `json:"stargazers_count"`
+	ForksCount      int       `json:"forks_count"`
+	UpdatedAt       time.Time `json:"updated_at"`
+	PushedAt        time.Time `json:"pushed_at"`
+	Private         bool      `json:"private"`
+	Fork            bool      `json:"fork"`
+	Owner           struct {
+		Login     string `json:"login"`
+		AvatarURL string `json:"avatar_url"`
+	} `json:"owner"`
+}
+
+// UserRepos lists repositories owned by the signed-in account, newest first.
+// /users/{login}/repos is used first because it also works when a token is
+// limited to public repository metadata; /user/repos is the fallback for
+// private repositories.
+func (c *Client) UserRepos(ctx context.Context) ([]UserRepo, error) {
+	login, err := c.Login(ctx)
+	if err != nil {
+		return nil, err
+	}
+	q := url.Values{
+		"sort":     {"updated"},
+		"per_page": {"100"},
+	}
+	var repos []UserRepo
+	if _, err := c.doJSON(ctx, "GET", "/users/"+url.PathEscape(login)+"/repos", q, nil, &repos); err != nil {
+		return nil, err
+	}
+	if len(repos) > 0 {
+		return repos, nil
+	}
+	q.Set("affiliation", "owner")
+	if _, err := c.doJSON(ctx, "GET", "/user/repos", q, nil, &repos); err != nil {
+		return nil, err
+	}
+	return repos, nil
+}
+
+// UserProfile is the subset of GitHub's /user payload the profile header
+// needs. Forgejo exposes compatible fields, so the same call works on both.
+type UserProfile struct {
+	Login       string `json:"login"`
+	Name        string `json:"name"`
+	AvatarURL   string `json:"avatar_url"`
+	PublicRepos int    `json:"public_repos"`
+	Followers   int    `json:"followers"`
+	Following   int    `json:"following"`
+}
+
+// Profile reads the signed-in account, including avatar and social counts.
+func (c *Client) Profile(ctx context.Context) (UserProfile, error) {
+	res, err := c.fetch(ctx, "/user", nil, "", "")
+	if err != nil {
+		return UserProfile{}, err
+	}
+	var p UserProfile
+	if err := json.Unmarshal(res.body, &p); err != nil || p.Login == "" {
+		return UserProfile{}, &Error{Status: 500, Code: "E_PARSE", Message: "无法解析账号资料"}
+	}
+	return p, nil
 }
 
 // Login validates the token and returns the account name. It uses the retrying

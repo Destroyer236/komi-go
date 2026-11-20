@@ -12,7 +12,7 @@ Windows 桌面版 GitHub Release 应用商店，Go + Wails v2 + WebView2 + SQLit
 | 仓库详情 | README Markdown 渲染与相对链接改写、Release 折叠列表、资产表、下载、复制链接、打开仓库页/Issues、预发布与缓存标记 |
 | 下载 | 2 并发队列、用户暂停/继续/取消、`.part` Range 续传、重启恢复、磁盘预检（包体 ×3）、镜像竞速、停滞 60s 检测、SHA-256 校验、无摘要标记“未校验” |
 | 应用库 | 真实安装目录、占用空间、打开应用、卸载（MSI ProductCode / UninstallString）、更新、固定、跳过版本、应用偏好、移除记录、恢复跟踪、导入导出、外部应用扫描与匹配 |
-| 认证 | Windows 凭据管理器持久化 token、PAT 登录、Device Flow（需自备 OAuth App client_id）、401 自动清 token 并提示重登 |
+| 认证 | Windows 凭据管理器持久化 token、PAT 登录、Device Flow（内置 Komi Go OAuth App，无需自备 client_id）、401 自动清 token 并提示重登 |
 | 网络 | 3 次指数退避 + 抖动、429/`Retry-After`、同 URL single-flight、分层 TTL 缓存、5 分钟负缓存、离线 stale、代理设置 |
 | 匹配算法 | Release 线识别、`owner/repo#app` 多应用归属、`pickedAssetIndex`、预发布开关、回退旧版本、资产过滤、七条更新判定、versionCode/同 tag 大小守卫 |
 | 生态 | GitHub / Codeberg / 自建 Forgejo 客户端；`komi://` 深链（owner/repo、releases/tag、tags、tree、git@、分享链接）；注册表协议注册；单实例转交深链 |
@@ -99,7 +99,7 @@ $env:KOMI_SIGN_CERT_PASSWORD = "..."
 ## 自更新与外部配置
 
 - 自更新仓库在设置项 `self_update.repo`（`owner/repo`），默认空，必须由发布者填写；发布 Release 时上传名字含 `windows`/`amd64`/`x64`/`arm64` 的 `.exe`、`.msi` 或 `.zip`。
-- Device Flow 需要 `github.client_id`（GitHub OAuth App 的 client_id）；没有 client_id 时仍可用 PAT 登录。
+- Device Flow 已内置 Komi Go 的 OAuth App client_id（设备码流程不包含 client_secret），仍可在 `github.client_id` 中覆盖为自己的应用；PAT 登录始终可用。
 - 代码签名需要发布者自己的证书；没有证书时构建产物是未签名版本。
 - Inno 安装包当前使用英文安装向导（Inno Setup 6 默认语言包不含简体中文），应用内界面是中文。
 

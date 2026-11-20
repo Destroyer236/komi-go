@@ -84,6 +84,10 @@ export function PingAPI():Promise<Record<string, any>>;
 
 export function PollDeviceFlow(arg1:string):Promise<Record<string, any>>;
 
+export function Profile():Promise<Record<string, any>>;
+
+export function ProfileRepos():Promise<Array<Record<string, any>>>;
+
 export function Quit():Promise<void>;
 
 export function RefreshRepo(arg1:string,arg2:string,arg3:string,arg4:boolean):Promise<catalog.RepoView>;

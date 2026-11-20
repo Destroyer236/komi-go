@@ -115,7 +115,11 @@ func (c *Client) oauthPost(ctx context.Context, path string, form url.Values) ([
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, &Error{Status: resp.StatusCode, Code: "E_AUTH", Message: "GitHub 授权服务返回异常"}
+		return nil, &Error{
+			Status:  resp.StatusCode,
+			Code:    "E_AUTH",
+			Message: fmt.Sprintf("GitHub 授权服务返回 %d：%s", resp.StatusCode, messageFromBody(body)),
+		}
 	}
 	return body, nil
 }
