@@ -692,6 +692,7 @@ function renderDiscover() {
     ${d.history.length && !isSearch ? `<div class="history-row" aria-label="最近搜索">
       <span class="tiny muted">最近</span>
       ${d.history.map((q) => `<button class="chip" data-action="history-search" data-q="${esc(q)}">${esc(q)}</button>`).join('')}
+      <button class="btn text small history-clear" data-action="clear-history" aria-label="清除搜索历史">${icon('close', 'sm')} 清除历史</button>
     </div>` : ''}`;
 
   let list;
@@ -2025,6 +2026,13 @@ async function onGlobalClick(e) {
         S.discover.page = 1;
         render();
         await loadDiscover();
+        break;
+      }
+      case 'clear-history': {
+        S.discover.history = [];
+        try { localStorage.removeItem('komi.searchHistory'); } catch (_) { /* ignore */ }
+        render();
+        toast('搜索历史已清除');
         break;
       }
       case 'clear-search': S.discover.query = ''; S.discover.page = 1; render(); loadDiscover(); break;
