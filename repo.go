@@ -338,6 +338,22 @@ func (a *App) Discover(kind string, page int, onlyInstallable bool) ([]catalog.R
 	return a.searchDirect(ctx, q, page, sort, "", onlyInstallable)
 }
 
+// CategoryCatalog returns the complete Windows Explore feed used by the
+// category rail. It matches the upstream sidebar dataset instead of the
+// currently visible discover page.
+func (a *App) CategoryCatalog() ([]catalog.RepoInfo, error) {
+	if a.backend == nil {
+		return nil, errors.New("分类数据暂时不可用")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	repos, err := a.backend.CategoryFeed(ctx)
+	if err != nil {
+		return nil, errors.New(friendly(err))
+	}
+	return repos, nil
+}
+
 func defaultQuery() string {
 	return fmt.Sprintf("stars:>60 pushed:>%s", daysAgo(30))
 }

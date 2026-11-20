@@ -9,6 +9,7 @@
 package github
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -31,6 +32,7 @@ const (
 	backendDefaultBase = "https://api.github-store.org/v1"
 	backendUserAgent   = "komi-go/0.3"
 	backendPageSize    = 20
+	backendFeedMirror  = "https://raw.githubusercontent.com/komi-store/komi-store-backend-data/main/cached-data/feed/windows.json"
 )
 
 // Backend is a read-only client for the Komi aggregation service.
@@ -104,6 +106,36 @@ func BackendShouldFallback(err error) bool {
 	return false
 }
 
+// flexStrings accepts both the API's string arrays and the offline mirror's
+// space-separated strings for topics/topicCodes.
+type flexStrings []string
+
+func (f *flexStrings) UnmarshalJSON(data []byte) error {
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 || bytes.Equal(data, []byte("null")) {
+		*f = nil
+		return nil
+	}
+	switch data[0] {
+	case '[':
+		var list []string
+		if err := json.Unmarshal(data, &list); err != nil {
+			return err
+		}
+		*f = list
+		return nil
+	case '"':
+		var raw string
+		if err := json.Unmarshal(data, &raw); err != nil {
+			return err
+		}
+		*f = strings.Fields(raw)
+		return nil
+	default:
+		return fmt.Errorf("invalid string list: %s", data)
+	}
+}
+
 // backendRepo is the JSON shape used by categories/feed/search/repo.
 type backendRepo struct {
 	ID               int64                             `json:"id"`
@@ -116,8 +148,8 @@ type backendRepo struct {
 	Forks            int                               `json:"forksCount"`
 	OpenIssues       int                               `json:"openIssuesCount"`
 	Language         string                            `json:"language"`
-	Topics           []string                          `json:"topics"`
-	TopicCodes       []string                          `json:"topicCodes"`
+	Topics           flexStrings                       `json:"topics"`
+	TopicCodes       flexStrings                       `json:"topicCodes"`
 	LicenseSPDX      string                            `json:"licenseSpdxId"`
 	LicenseName      string                            `json:"licenseName"`
 	UpdatedAt        string                            `json:"updatedAt"`
@@ -167,7 +199,7 @@ func (d backendRepo) toInfo() catalog.RepoInfo {
 		DefaultBranch:    d.DefaultBranch,
 		AvatarURL:        d.Owner.AvatarURL,
 		HTMLURL:          d.HTMLURL,
-		Topics:           d.Topics,
+		Topics:           []string(d.Topics),
 		UpdatedAt:        parseBackendTime(d.UpdatedAt),
 		SourceHost:       "github.com",
 		Language:         d.Language,
@@ -177,7 +209,7 @@ func (d backendRepo) toInfo() catalog.RepoInfo {
 		DailyStars:       d.DailyStars,
 		TrendingScore:    d.TrendingScore,
 		PopularityScore:  d.PopularityScore,
-		TopicCodes:       d.TopicCodes,
+		TopicCodes:       []string(d.TopicCodes),
 	}
 	if info.LatestReleaseAt.IsZero() {
 		if pr, ok := d.PlatformReleases["windows"]; ok {
@@ -348,7 +380,12 @@ func (b *Backend) fetch(ctx context.Context, path string, q url.Values, etag str
 }
 
 func (b *Backend) fetchOnce(ctx context.Context, path string, q url.Values, etag string) (rawResponse, error) {
-	u := strings.TrimRight(b.base, "/") + "/" + strings.TrimLeft(path, "/")
+	base := strings.TrimRight(b.base, "/")
+	u := path
+	external := strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://")
+	if !external {
+		u = base + "/" + strings.TrimLeft(path, "/")
+	}
 	if len(q) > 0 {
 		u += "?" + q.Encode()
 	}
@@ -358,7 +395,7 @@ func (b *Backend) fetchOnce(ctx context.Context, path string, q url.Values, etag
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", backendUserAgent)
-	if tok := b.authToken(); tok != "" {
+	if tok := b.authToken(); tok != "" && !external {
 		req.Header.Set("X-GitHub-Token", tok)
 	}
 	if etag != "" {
@@ -479,6 +516,30 @@ func (b *Backend) Discover(ctx context.Context, kind string, page int, onlyInsta
 		end = len(repos)
 	}
 	return repos[start:end], out.meta, nil
+}
+
+// CategoryFeed returns the complete Windows Explore feed used by the
+// upstream sidebar categories. Backend /feed is paged, so the upstream offline
+// mirror (the same 150-repo snapshot) is read once and cached for local
+// topicCodes filtering. This keeps privacy/media/tool populated even when only
+// the first feed page is visible.
+func (b *Backend) CategoryFeed(ctx context.Context) ([]catalog.RepoInfo, error) {
+	spec := cacheSpec{
+		key:   "backend:feed-catalog:windows",
+		fresh: 6 * time.Hour,
+		max:   7 * 24 * time.Hour,
+	}
+	out, err := b.get(ctx, backendFeedMirror, nil, spec)
+	if err != nil {
+		return nil, err
+	}
+	var doc struct {
+		Repositories []backendRepo `json:"repositories"`
+	}
+	if err := json.Unmarshal(out.body, &doc); err != nil {
+		return nil, &Error{Status: 500, Code: "E_PARSE", Message: "分类数据格式异常"}
+	}
+	return filterBackendRepos(doc.Repositories, false), nil
 }
 
 func filterBackendRepos(list []backendRepo, only bool) []catalog.RepoInfo {

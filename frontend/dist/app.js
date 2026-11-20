@@ -40,6 +40,7 @@ const S = {
   discover: {
     feed: 'trending', page: 1, query: '', sort: 'best', lang: '',
     only: false, results: [], loading: false, error: '', history: [], total: 0, hasMore: false, platform: 'all', category: 'all',
+    categoryCatalog: [], categoryLoading: false, categoryError: '',
   },
   onboarding: { needs: false, step: 0, theme: 'system', auto: true, tray: true, autostart: false },
   busy: 0,
@@ -572,9 +573,27 @@ function repoMatchesCategory(r, id) {
 
 function discoverVisibleResults() {
   const d = S.discover;
-  const all = d.results || [];
+  const isSearch = !!d.query.trim();
+  const all = (!isSearch && d.category !== 'all') ? (d.categoryCatalog || []) : (d.results || []);
   if (d.category === 'all') return all;
   return all.filter((r) => repoMatchesCategory(r, d.category));
+}
+
+async function loadCategoryCatalog() {
+  const d = S.discover;
+  if (d.categoryCatalog.length || d.categoryLoading) return;
+  d.categoryLoading = true;
+  d.categoryError = '';
+  renderDiscover();
+  try {
+    const list = await call('CategoryCatalog');
+    d.categoryCatalog = list || [];
+  } catch (e) {
+    d.categoryError = e.message;
+  } finally {
+    d.categoryLoading = false;
+    if (S.route === 'discover' && !S.discover.query.trim()) renderDiscover();
+  }
 }
 
 function repoCard(r) {
@@ -610,6 +629,8 @@ function renderDiscover() {
   const isSearch = !!d.query.trim();
   const categoryLabel = discoverCategoryLabel(d.category);
   const visible = discoverVisibleResults();
+  const categoryFetching = !isSearch && d.category !== 'all' && d.categoryLoading;
+  const categoryFailed = !isSearch && d.category !== 'all' && !!d.categoryError;
   const tabs = [['trending', '热门'], ['fresh', '新鲜'], ['classic', '经典'], ['windows', 'Windows']];
   const hero = `
     <section class="card hero hero-banner">
@@ -674,21 +695,23 @@ function renderDiscover() {
     </div>` : ''}`;
 
   let list;
-  if (d.loading) {
+  if (d.loading || categoryFetching) {
     list = `<div class="repo-grid">${'<div class="skeleton"></div>'.repeat(6)}</div>`;
+  } else if (categoryFailed) {
+    list = `<div class="empty"><div class="art">${icon('alert', 'lg')}</div><h3>分类数据加载失败</h3><p>${esc(d.categoryError)}</p><button class="btn tonal" data-action="retry-category">${icon('refresh')} 重试</button></div>`;
   } else if (d.error) {
     list = `<div class="empty"><div class="art">${icon('alert', 'lg')}</div><h3>搜索失败</h3><p>${esc(d.error)}</p><button class="btn tonal" data-action="retry-discover">${icon('refresh')} 重试</button></div>`;
   } else if (!visible.length) {
     list = d.results.length && d.category !== 'all'
-      ? `<div class="empty"><div class="art">${icon('inbox', 'lg')}</div><h3>“${esc(categoryLabel)}”分类暂无应用</h3><p>当前结果里没有归到这个分类的仓库，可以看看全部分类。</p><button class="btn tonal" data-action="category" data-category="all">查看全部</button></div>`
+      ? `<div class="empty"><div class="art">${icon('inbox', 'lg')}</div><h3>“${esc(categoryLabel)}”分类暂无应用</h3><p>完整 Windows 应用榜里没有归到这个分类的仓库，可以看看全部分类。</p><button class="btn tonal" data-action="category" data-category="all">查看全部</button></div>`
       : `<div class="empty"><div class="art">${icon('inbox', 'lg')}</div><h3>没有找到结果</h3><p>换一个关键词，或切换到“全部”平台查看所有安装包。</p><button class="btn tonal" data-action="platform" data-platform="all">查看全部平台</button></div>`;
   } else {
     list = `<div class="repo-grid">${visible.map(repoCard).join('')}</div>
-      <div class="pager">
+      ${(!isSearch && d.category !== 'all') ? '' : `<div class="pager">
         <button class="icon-btn" data-action="page" data-page="${d.page - 1}" ${d.page <= 1 ? 'disabled' : ''} aria-label="上一页">${icon('back')}</button>
         <span class="badge outline">第 ${d.page} 页</span>
         <button class="icon-btn" data-action="page" data-page="${d.page + 1}" ${d.hasMore ? '' : 'disabled'} aria-label="下一页">${icon('back', 'flip')}</button>
-      </div>`;
+      </div>`}`;
   }
 
   main.innerHTML = `${isSearch ? '' : hero}
@@ -1988,11 +2011,15 @@ async function onGlobalClick(e) {
       }
       case 'feed': S.discover.feed = el.dataset.feed; S.discover.page = 1; S.discover.query = ''; loadDiscover(); break;
       case 'category': {
-        S.discover.category = el.dataset.category || 'all';
+        const category = el.dataset.category || 'all';
+        if (category !== S.discover.category) S.discover.categoryError = '';
+        S.discover.category = category;
         if (S.route !== 'discover') navigate('discover');
         else render();
+        if (category !== 'all') void loadCategoryCatalog();
         break;
       }
+      case 'retry-category': S.discover.categoryError = ''; loadCategoryCatalog(); break;
       case 'history-search': {
         S.discover.query = el.dataset.q || '';
         S.discover.page = 1;

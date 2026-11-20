@@ -22,6 +22,10 @@ export function CancelDownload(arg1) {
   return window['go']['main']['App']['CancelDownload'](arg1);
 }
 
+export function CategoryCatalog() {
+  return window['go']['main']['App']['CategoryCatalog']();
+}
+
 export function CheckSelfUpdate() {
   return window['go']['main']['App']['CheckSelfUpdate']();
 }
