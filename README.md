@@ -10,7 +10,7 @@ Windows 桌面版 GitHub Release 应用商店，Go + Wails v2 + WebView2 + SQLit
 |---|---|
 | 搜索 / 发现 | 热门、新鲜、经典、Windows 四条榜单；人工智能/隐私/网络/媒体/社交/阅读/工具分类（覆盖上游完整 Windows Explore 榜单，按 `topicCodes` 精确匹配）；关键词搜索；语言筛选；星标/更新/复刻排序；搜索历史；分页；只看有 Windows 安装资产的仓库 |
 | 仓库详情 | README Markdown 渲染与相对链接改写（含 GFM 表格、表格内图片）、Release 折叠列表、资产表、下载、复制链接、打开仓库页/Issues、预发布与缓存标记 |
-| 下载 | 2 并发队列、用户暂停/继续/取消、`.part` Range 续传、重启恢复、磁盘预检（包体 ×3）、镜像竞速、停滞 60s 检测、SHA-256 校验、无摘要标记“未校验” |
+| 下载 | 2 并发队列、**分段多连接下载（1–512 线程，可设置）**、用户暂停/继续/取消、`.part` Range 续传、分段进度图持久化、服务器不支持 Range 时自动单流回退、重启恢复、磁盘预检（包体 ×3）、镜像竞速、停滞 60s 检测、SHA-256 校验、无摘要标记“未校验” |
 | 应用库 | 真实安装目录、占用空间、打开应用、卸载（MSI ProductCode / UninstallString）、更新、固定、跳过版本、应用偏好、移除记录、恢复跟踪、导入导出、外部应用扫描与匹配 |
 | 认证 | Windows 凭据管理器持久化 token、Device Flow 登录（内置 Komi Go OAuth App，无需自备 client_id）、401 自动清 token 并提示重登 |
 | 网络 | 3 次指数退避 + 抖动、429/`Retry-After`、同 URL single-flight、分层 TTL 缓存、5 分钟负缓存、离线 stale、代理设置 |

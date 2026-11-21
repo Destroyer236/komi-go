@@ -96,6 +96,14 @@ func NewApp() (*App, error) {
 	}
 
 	a.dl = download.New(layout.Downloads, store, a.currentToken, a.emit)
+	// Parallel range requests are persisted, so a restart keeps the chosen
+	// thread count instead of silently dropping back to the default.
+	if raw, _ := store.GetSetting(context.Background(), "download.connections"); strings.TrimSpace(raw) != "" {
+		n := download.DefaultConnections
+		if _, err := fmt.Sscanf(raw, "%d", &n); err == nil {
+			a.dl.SetConnections(n)
+		}
+	}
 	if saved, _ := store.GetSetting(context.Background(), "download.dir"); strings.TrimSpace(saved) != "" {
 		if st, err := os.Stat(saved); err == nil && st.IsDir() {
 			a.dl.SetDir(saved)

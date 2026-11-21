@@ -1619,7 +1619,7 @@ function settingsSectionSummary(id) {
   if (id === 'network') {
     const mode = S.settings['network.mirrorSelected'] || 'auto';
     const mirror = mode === 'auto' ? '自动' : mode === 'direct' ? '直连' : (mirrorConfig().find((m) => m.template === mode)?.name || '自定义');
-    return `代理：${S.settings['network.proxy'] ? '已配置' : '未设置'} · 镜像：${mirror}`;
+    return `代理：${S.settings['network.proxy'] ? '已配置' : '未设置'} · 镜像：${mirror} · ${esc(S.settings['download.connections'] || '8')} 线程`;
   }
   if (id === 'desktop') return `关闭到托盘：${S.settings['ui.close_to_tray'] === 'true' ? '开启' : '关闭'} · 开机启动：${a.autostart ? '开启' : '关闭'}`;
   if (id === 'data') return `缓存 ${Number(S.cache.entries || 0)} 条 · ${fmtBytes(S.cache.bytes || 0)}`;
@@ -1699,6 +1699,8 @@ function settingsSectionContent(id) {
       settingRow('external', '代理操作', '保存后立即应用到后续请求。',
         `<button class="btn outlined small" data-action="save-proxy">保存代理</button><button class="btn text small" data-action="ping">测试连接</button>`) +
       settingRow('download', '镜像模式', '自动会在下载前测速并优先延迟最低的镜像。', mirrorModeControl()) +
+      settingRow('download', '下载线程', '每个任务同时开几条分段连接（1–512）。默认 8；服务器不支持 Range 或文件很小时自动回落到单连接，线程越多越吃带宽和对方限流。',
+        `<input class="input" type="number" min="1" max="512" style="width:96px" data-setting="download.connections" value="${esc(S.settings['download.connections'] || '8')}"><span class="muted small">线程</span>`) +
       mirrorPanel(),
     '下载加速与连接方式');
   }
@@ -2795,7 +2797,12 @@ async function onGlobalChange(e) {
     S.settings[key] = String(value);
     if (key === 'theme') setTheme(String(value));
     if (key === 'ui.reduce_motion') applyMotion();
-    toast('设置已保存', 'success');
+    if (key === 'download.connections') {
+      const n = Number(value);
+      toast(n > 64 ? `已设为 ${n} 线程；线程过高可能被对方限流` : `已设为 ${n} 线程`, 'success');
+    } else {
+      toast('设置已保存', 'success');
+    }
   } catch (err) {
     notifyError(err);
     if (t.type === 'checkbox') t.checked = !t.checked;

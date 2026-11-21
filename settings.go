@@ -22,7 +22,7 @@ import (
 var settingKeys = []string{
 	"theme", "ui.accent", "update.auto", "update.interval", "update.prerelease",
 	"update.fallback_older", "update.filter", "network.proxy", "network.mirrors",
-	"network.mirrorSelected", "network.mirrors.seeded",
+	"network.mirrorSelected", "network.mirrors.seeded", "download.connections",
 	"ui.close_to_tray", "ui.reduce_motion", "system.autostart", "github.client_id",
 	"self_update.repo", "onboarding.done",
 }
@@ -47,6 +47,7 @@ func (a *App) GetSettings() (map[string]string, error) {
 		"network.mirrors":        presetMirrorJSON(),
 		"network.mirrorSelected": "auto",
 		"network.mirrors.seeded": "false",
+		"download.connections":   fmt.Sprintf("%d", download.DefaultConnections),
 		"ui.close_to_tray":       "true",
 		"ui.reduce_motion":       "false",
 		"system.autostart":       "false",
@@ -101,6 +102,15 @@ func (a *App) SetSetting(key, value string) error {
 		if err := matcher.AssetFilterError(value); err != nil {
 			return err
 		}
+	case "download.connections":
+		n := 0
+		if _, err := fmt.Sscanf(value, "%d", &n); err != nil {
+			return errors.New("线程数需为整数")
+		}
+		if n < 1 || n > download.MaxConnections {
+			return fmt.Errorf("线程数需在 1–%d 之间", download.MaxConnections)
+		}
+		value = fmt.Sprintf("%d", n)
 	case "network.proxy":
 		if value != "" {
 			if _, err := platform.HTTPClient(value); err != nil {
@@ -177,6 +187,10 @@ func (a *App) SetSetting(key, value string) error {
 		_ = a.store.SetSetting(ctx, "network.mirrors.seeded", "true")
 	case "network.mirrorSelected":
 		a.applyMirrorSelection()
+	case "download.connections":
+		n := download.DefaultConnections
+		_, _ = fmt.Sscanf(value, "%d", &n)
+		a.dl.SetConnections(n)
 	case "system.autostart":
 		_ = winreg.SetAutostart(a.exePath(), value == "true", true)
 	}

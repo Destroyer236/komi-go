@@ -135,6 +135,8 @@ type Manager struct {
 	selected string
 	probes   map[string]time.Time // template -> measured latency (0 = failed)
 	closed   bool
+	// connections is how many parallel range requests a job may open.
+	connections int
 }
 
 // New creates a manager downloading into dir.
@@ -152,8 +154,37 @@ func New(dir string, store *ledger.Store, token func() string, emit Emitter) *Ma
 		probes: map[string]time.Time{},
 		auto:   true,
 		client: &http.Client{Timeout: 0},
+
+		connections: DefaultConnections,
 	}
 }
+
+// SetConnections sets how many parallel range requests a job may open and
+// returns the value actually applied (clamped to 1..MaxConnections).
+func (m *Manager) SetConnections(n int) int {
+	if n < 1 {
+		n = 1
+	}
+	if n > MaxConnections {
+		n = MaxConnections
+	}
+	m.mu.Lock()
+	m.connections = n
+	m.mu.Unlock()
+	return n
+}
+
+// Connections reports the current parallelism.
+func (m *Manager) Connections() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.connections < 1 {
+		return DefaultConnections
+	}
+	return m.connections
+}
+
+func (m *Manager) connectionCount() int { return m.Connections() }
 
 // SetHTTPClient swaps the transport used for transfers and mirror probes.
 func (m *Manager) SetHTTPClient(h *http.Client) {
@@ -587,6 +618,45 @@ func (m *Manager) fetchOne(ctx context.Context, st *jobState, req Request, rawUR
 	part := st.info.DestPath + ".part"
 	metaPath := part + ".meta"
 
+	// Reusing a partial file only makes sense for the same URL.
+	meta := readMeta(metaPath)
+	if meta.URL != "" && meta.URL != rawURL {
+		_ = os.Remove(part)
+		_ = os.Remove(metaPath)
+		meta = partialMeta{}
+	}
+
+	total := req.Asset.Size
+	if total <= 0 {
+		total = meta.Total
+	}
+	// Multi-connection first: resume the persisted map, or plan a fresh split
+	// when the size is known and the user asked for more than one stream.
+	if n := segmentCount(total, m.connectionCount()); n > 1 {
+		segs := usableSegments(meta.Segments, total)
+		if len(segs) == 0 && !fileExists(part) {
+			segs = planSegments(total, n)
+		}
+		if len(segs) > 0 {
+			dest, verified, err := m.fetchSegmented(ctx, st, req, rawURL, total, segs, part, metaPath, meta.ETag)
+			if err == nil {
+				return dest, verified, nil
+			}
+			if !errors.Is(err, errNoRangeSupport) {
+				return "", false, err
+			}
+			// The server ignored Range; throw the map away and stream once.
+			_ = os.Remove(part)
+			_ = os.Remove(metaPath)
+		}
+	}
+	return m.fetchSingle(ctx, st, req, rawURL)
+}
+
+func (m *Manager) fetchSingle(ctx context.Context, st *jobState, req Request, rawURL string) (string, bool, error) {
+	part := st.info.DestPath + ".part"
+	metaPath := part + ".meta"
+
 	var offset int64
 	if fi, err := os.Stat(part); err == nil {
 		offset = fi.Size()
@@ -740,34 +810,7 @@ func (m *Manager) fetchOne(ctx context.Context, st *jobState, req Request, rawUR
 	m.saveMeta(metaPath, rawURL, resp.Header.Get("ETag"), total)
 	m.progress(st, done, total)
 
-	m.updateStatus(st, ledger.StatusVerifying, "")
-	digest := req.Asset.Digest
-	verified := false
-	if strings.TrimSpace(digest) == "" {
-		if side, err := m.sidecarDigest(req.Asset.DownloadURL); err == nil && side != "" {
-			digest = side
-			req.Asset.Digest = side
-			st.mu.Lock()
-			st.info.Digest = side
-			st.mu.Unlock()
-		}
-	}
-	if digest != "" {
-		if err := verifyDigest(part, digest); err != nil {
-			m.saveMeta(metaPath, rawURL, resp.Header.Get("ETag"), total)
-			return "", false, err
-		}
-		verified = true
-	}
-	final := st.info.DestPath
-	if fileExists(final) {
-		final = platform.UniquePath(filepath.Dir(final), filepath.Base(final))
-	}
-	if err := os.Rename(part, final); err != nil {
-		return "", false, fmt.Errorf("重命名失败：%w", err)
-	}
-	_ = os.Remove(metaPath)
-	return final, verified, nil
+	return m.finalize(st, req, part, metaPath)
 }
 
 // sidecarDigest tries <asset>.sha256 and parses the first 64 hex characters.
@@ -1125,6 +1168,9 @@ type partialMeta struct {
 	URL   string `json:"url"`
 	ETag  string `json:"etag"`
 	Total int64  `json:"total"`
+	// Segments is the multi-connection map; empty means the older
+	// single-stream resume that only tracks the written offset.
+	Segments []segment `json:"segments,omitempty"`
 }
 
 func (m *Manager) tokenValue() string {
