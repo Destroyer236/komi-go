@@ -1,0 +1,46 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  go:
+    # The GUI layer is Windows-only (Wails + WebView2), so build/vet/test run
+    # where the code can actually compile.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: gofmt
+        shell: bash
+        run: |
+          unformatted=$(gofmt -l . | grep -v '^frontend/' || true)
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: build
+        run: go build ./...
+      - name: vet
+        run: go vet ./...
+      - name: test
+        run: go test ./...
+
+  frontend:
+    # frontend/dist is hand-written source (no bundler), so the only check that
+    # makes sense today is a syntax parse.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: syntax check
+        run: node --check frontend/dist/app.js

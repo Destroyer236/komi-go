@@ -30,8 +30,8 @@ func TestInstallLifecycle(t *testing.T) {
 		ID: "owner/repo", Owner: "owner", Repo: "repo", DisplayName: "Repo",
 		InstalledVersion: "1.0.0", InstalledReleaseTag: "v1.0.0",
 		InstalledAssetID: 11, InstalledAssetName: "Repo-1.0.0.exe",
-		InstalledAssetDigest: "sha256:aaa", InstalledReleasePubAt: now - 86400,
-		InstallPath: `C:\Users\me\AppData\Local\KomiGo\apps\owner-repo\v1.0.0`,
+		InstalledAssetDigest: "sha256:aaa", InstalledAssetSize: 52428800, InstalledReleasePubAt: now - 86400,
+		InstallPath:   `C:\Users\me\AppData\Local\KomiGo\apps\owner-repo\v1.0.0`,
 		InstallSource: "github", InstalledAt: now, UpdateCheckEnabled: true,
 	}
 	if err := st.UpsertInstall(ctx, app); err != nil {
@@ -44,6 +44,11 @@ func TestInstallLifecycle(t *testing.T) {
 	}
 	if got.InstalledReleaseTag != "v1.0.0" || got.Pinned || got.UpdateAvailable {
 		t.Fatalf("unexpected row: %+v", got)
+	}
+	// The update checker compares against the installed asset size, so it has to
+	// survive the round trip instead of reading back as zero.
+	if got.InstalledAssetSize != 52428800 {
+		t.Fatalf("installed_asset_size = %d, want 52428800", got.InstalledAssetSize)
 	}
 
 	if err := st.SetPinned(ctx, "owner/repo", true); err != nil {

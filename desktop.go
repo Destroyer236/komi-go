@@ -307,5 +307,3 @@ func (a *App) VersionInfo() map[string]any {
 func (a *App) OpenLogs() error {
 	return platform.OpenFolder(a.layout.Logs)
 }
-
-

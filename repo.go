@@ -110,9 +110,13 @@ func (a *App) SearchPage(query string, page int, sort string, language string, p
 	if raw == "" {
 		return SearchPage{}, nil
 	}
+	// Paging is decided before the local filter runs: a page full of upstream
+	// hits that our platform/heuristic filter drops would otherwise look like
+	// the last page and hide every later one.
+	candidates := len(merged)
 	merged = filterSearchResults(merged, platform, raw, sort)
 	total := len(merged)
-	hasMore := len(merged) >= searchPageSize
+	hasMore := candidates >= searchPageSize
 	return SearchPage{Items: merged, Total: total, Page: page, PageSize: searchPageSize, HasMore: hasMore}, nil
 }
 

@@ -39,6 +39,7 @@ type InstalledApp struct {
 	InstalledAssetID      int64  `json:"installedAssetId"`
 	InstalledAssetDigest  string `json:"installedAssetDigest"`
 	InstalledAssetURL     string `json:"installedAssetUrl"`
+	InstalledAssetSize    int64  `json:"installedAssetSize"`
 	InstalledReleaseID    int64  `json:"installedReleaseId"`
 	InstalledReleaseTag   string `json:"installedReleaseTag"`
 	InstalledReleasePubAt int64  `json:"installedReleasePublishedAt"`
@@ -462,7 +463,8 @@ func (s *Store) UpsertInstall(ctx context.Context, a InstalledApp) error {
 INSERT INTO installed_app (
   id, owner, repo, display_name,
   installed_version, installed_version_code, installed_asset_name, installed_asset_id,
-  installed_asset_digest, installed_asset_url, installed_release_id, installed_release_tag,
+  installed_asset_digest, installed_asset_url, installed_asset_size,
+  installed_release_id, installed_release_tag,
   installed_release_published_at, install_path, install_dir, install_size,
   install_source, product_code, uninstall_string, library_status, uninstalled_at,
   app_slug, source_host,
@@ -473,7 +475,7 @@ INSERT INTO installed_app (
   pending_install_path, pending_version, pending_asset_name, pending_release_tag,
   pending_asset_id, pending_digest,
   installed_at, last_checked_at, last_check_error
-) VALUES (?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?, ?,?,?,?,?)
+) VALUES (?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
   owner=excluded.owner, repo=excluded.repo, display_name=excluded.display_name,
   installed_version=excluded.installed_version,
@@ -482,6 +484,7 @@ ON CONFLICT(id) DO UPDATE SET
   installed_asset_id=excluded.installed_asset_id,
   installed_asset_digest=excluded.installed_asset_digest,
   installed_asset_url=excluded.installed_asset_url,
+  installed_asset_size=excluded.installed_asset_size,
   installed_release_id=excluded.installed_release_id,
   installed_release_tag=excluded.installed_release_tag,
   installed_release_published_at=excluded.installed_release_published_at,
@@ -509,7 +512,7 @@ ON CONFLICT(id) DO UPDATE SET
   last_check_error=excluded.last_check_error`,
 		a.ID, a.Owner, a.Repo, a.DisplayName,
 		a.InstalledVersion, a.InstalledVersionCode, a.InstalledAssetName, a.InstalledAssetID,
-		a.InstalledAssetDigest, a.InstalledAssetURL, a.InstalledReleaseID, a.InstalledReleaseTag,
+		a.InstalledAssetDigest, a.InstalledAssetURL, a.InstalledAssetSize, a.InstalledReleaseID, a.InstalledReleaseTag,
 		a.InstalledReleasePubAt, a.InstallPath, a.InstallDir, a.InstallSize,
 		a.InstallSource, a.ProductCode, a.UninstallStr, a.LibraryStatus, a.UninstalledAt,
 		a.AppSlug, a.SourceHost,
@@ -534,7 +537,7 @@ func scanApp(row scanner) (InstalledApp, error) {
 	err := row.Scan(
 		&a.ID, &a.Owner, &a.Repo, &a.DisplayName,
 		&a.InstalledVersion, &a.InstalledVersionCode, &a.InstalledAssetName, &a.InstalledAssetID,
-		&a.InstalledAssetDigest, &a.InstalledAssetURL, &a.InstalledReleaseID, &a.InstalledReleaseTag,
+		&a.InstalledAssetDigest, &a.InstalledAssetURL, &a.InstalledAssetSize, &a.InstalledReleaseID, &a.InstalledReleaseTag,
 		&a.InstalledReleasePubAt,
 		&a.InstallPath, &a.InstallDir, &a.InstallSize,
 		&a.InstallSource, &a.ProductCode, &a.UninstallStr, &a.LibraryStatus, &a.UninstalledAt,
@@ -568,6 +571,7 @@ const installedColumns = `
   COALESCE(installed_version,''), COALESCE(installed_version_code,0),
   COALESCE(installed_asset_name,''), COALESCE(installed_asset_id,0),
   COALESCE(installed_asset_digest,''), COALESCE(installed_asset_url,''),
+  COALESCE(installed_asset_size,0),
   COALESCE(installed_release_id,0), COALESCE(installed_release_tag,''),
   COALESCE(installed_release_published_at,0),
   COALESCE(install_path,''), COALESCE(install_dir,''), COALESCE(install_size,0),

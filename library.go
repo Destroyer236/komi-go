@@ -407,7 +407,7 @@ func (a *App) CheckUpdates(force bool) ([]ledger.InstalledApp, error) {
 					InstalledTag:         app.InstalledReleaseTag,
 					InstalledAssetID:     app.InstalledAssetID,
 					InstalledDigest:      app.InstalledAssetDigest,
-					InstalledSize:        int64(0),
+					InstalledSize:        app.InstalledAssetSize,
 					InstalledPublishedAt: unixTime(app.InstalledReleasePubAt),
 					CandidateTag:         sel.Release.TagName,
 					CandidateAssetID:     sel.Asset.ID,

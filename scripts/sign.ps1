@@ -6,7 +6,7 @@ param(
     [string]$PfxPassword = $env:KOMI_SIGN_CERT_PASSWORD,
     [string]$Thumbprint = $env:KOMI_SIGN_THUMBPRINT,
     [string]$Subject = $env:KOMI_SIGN_SUBJECT,
-    [string]$TimestampUrl = "http://timestamp.digicert.com"
+    [string]$TimestampUrl = "https://timestamp.digicert.com"
 )
 
 $ErrorActionPreference = "Stop"

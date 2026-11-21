@@ -399,6 +399,52 @@ func TestDownloadMissingAsset(t *testing.T) {
 	}
 }
 
+// A server that stops sending bytes used to surface as "已暂停" with no
+// explanation. The watchdog now records why, so the UI can say the network
+// stalled instead of implying the user cancelled.
+func TestDownloadStallPausesWithReason(t *testing.T) {
+	old := stallAfter
+	stallAfter = 300 * time.Millisecond
+	t.Cleanup(func() { stallAfter = old })
+
+	body := bytes.Repeat([]byte("stall-"), 2048)
+	release := make(chan struct{})
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != assetPath {
+			http.Error(w, "not an asset", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		w.WriteHeader(http.StatusOK)
+		// One chunk, then silence: the reader gets bytes, so progress starts.
+		_, _ = w.Write(body[:4096])
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		<-release
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	m := New(t.TempDir(), nil, func() string { return "" }, nil)
+	m.SetHTTPClient(testClient(srv))
+	job, err := m.Start(Request{
+		RepoKey: "o/r",
+		Asset:   catalog.Asset{Name: "app.exe", Size: int64(len(body)), DownloadURL: testAssetURL},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForStatus(t, m, job.ID, "paused")
+	snap := findJob(t, m, job.ID)
+	if !strings.Contains(snap.Error, "停滞") {
+		t.Fatalf("error = %q, want a stall message", snap.Error)
+	}
+	if !snap.CanResume {
+		t.Fatal("a stalled job must stay resumable")
+	}
+}
+
 // --- helpers ---
 
 type rangeLog struct {

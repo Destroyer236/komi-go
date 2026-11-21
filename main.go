@@ -2,9 +2,12 @@ package main
 
 import (
 	"embed"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
+
+	"komi-go/internal/platform"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -16,6 +19,7 @@ import (
 var assets embed.FS
 
 func main() {
+	initLogging()
 	app, err := NewApp()
 	if err != nil {
 		log.Fatal(err)
@@ -57,4 +61,24 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+// initLogging mirrors log output into %LocalAppData%\KomiGo\logs\komi.log.
+// A GUI build has no console, so a failed startup would otherwise leave no
+// trace at all. The file is rotated once at 8 MB to keep it bounded.
+func initLogging() {
+	layout, err := platform.EnsureLayout()
+	if err != nil {
+		return
+	}
+	path := filepath.Join(layout.Logs, "komi.log")
+	if fi, statErr := os.Stat(path); statErr == nil && fi.Size() > 8<<20 {
+		_ = os.Rename(path, path+".1")
+	}
+	f, openErr := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if openErr != nil {
+		return
+	}
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+	log.SetOutput(io.MultiWriter(os.Stderr, f))
 }

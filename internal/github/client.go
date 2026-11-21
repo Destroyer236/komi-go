@@ -485,21 +485,34 @@ func (c *Client) execute(req *http.Request, accept, etag string) (rawResponse, e
 		}
 		res.err = &Error{Status: 401, Code: "E_AUTH", Message: "登录已失效，请重新登录 GitHub"}
 	case resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests:
-		apiErr := &Error{Status: resp.StatusCode, Code: "E_RATE_LIMIT", Rate: true}
+		message := messageFromBody(body)
+		apiErr := &Error{Status: resp.StatusCode, Code: "E_RATE_LIMIT", Message: message}
 		apiErr.ResetAt = parseReset(resp.Header)
-		apiErr.Remaining, _ = strconv.Atoi(resp.Header.Get("X-RateLimit-Remaining"))
+		remainingHdr := resp.Header.Get("X-RateLimit-Remaining")
+		if remainingHdr != "" {
+			if n, convErr := strconv.Atoi(remainingHdr); convErr == nil {
+				apiErr.Remaining = n
+			}
+		}
 		if ra := resp.Header.Get("Retry-After"); ra != "" {
 			if secs, err := strconv.Atoi(ra); err == nil {
 				apiErr.RetryAfter = time.Duration(secs) * time.Second
 			}
 		}
-		if !apiErr.Rate || resp.StatusCode == http.StatusForbidden {
-			apiErr.Message = messageFromBody(body)
+		// A 403 is only a rate limit when the quota is actually exhausted or the
+		// body says so. Permission errors (private repo, missing scope, DMCA
+		// block) used to be reported as "额度已用完", which sent users to wait
+		// for a reset that would never help.
+		limited := resp.StatusCode == http.StatusTooManyRequests ||
+			remainingHdr == "0" ||
+			looksRateLimited(message)
+		apiErr.Rate = limited
+		if !limited {
+			apiErr.ResetAt = time.Time{}
+			apiErr.RetryAfter = 0
+			apiErr.Code = "E_FORBIDDEN"
 			if apiErr.Message == "" {
 				apiErr.Message = "没有访问权限（可能是私有仓库或 token 权限不足）"
-			}
-			if resp.StatusCode == http.StatusForbidden {
-				apiErr.Code = "E_FORBIDDEN"
 			}
 		}
 		res.err = apiErr
@@ -584,6 +597,18 @@ func messageFromBody(body []byte) string {
 		s = s[:200]
 	}
 	return s
+}
+
+// looksRateLimited recognises the wording GitHub uses for primary and
+// secondary limits; a plain permission 403 never matches.
+func looksRateLimited(message string) bool {
+	m := strings.ToLower(message)
+	for _, marker := range []string{"rate limit", "abuse detection", "secondary limit", "too many requests"} {
+		if strings.Contains(m, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // HumanDuration renders a short Chinese duration ("3 分钟").

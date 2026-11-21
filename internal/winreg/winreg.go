@@ -22,17 +22,17 @@ const (
 
 // UninstallEntry is one row from the Windows "Apps & features" list.
 type UninstallEntry struct {
-	Name           string `json:"name"`
-	Version        string `json:"version"`
-	Publisher      string `json:"publisher"`
+	Name            string `json:"name"`
+	Version         string `json:"version"`
+	Publisher       string `json:"publisher"`
 	InstallLocation string `json:"installLocation"`
-	Uninstall      string `json:"uninstallString"`
-	QuietUninstall string `json:"quietUninstallString"`
-	DisplayIcon    string `json:"displayIcon"`
-	ProductCode    string `json:"productCode"`
-	EstimatedKB    int64  `json:"estimatedKb"`
-	Hive           string `json:"hive"`
-	Key            string `json:"key"`
+	Uninstall       string `json:"uninstallString"`
+	QuietUninstall  string `json:"quietUninstallString"`
+	DisplayIcon     string `json:"displayIcon"`
+	ProductCode     string `json:"productCode"`
+	EstimatedKB     int64  `json:"estimatedKb"`
+	Hive            string `json:"hive"`
+	Key             string `json:"key"`
 }
 
 // ListUninstall enumerates HKLM (64/32-bit views) and HKCU uninstall keys.

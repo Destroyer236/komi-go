@@ -4,6 +4,12 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="light dark" />
+  <!-- Everything the UI needs is same-origin: app.js, styles.css and the two
+       scripts Wails injects per page. Remote images stay allowed because
+       avatars and README screenshots are lazy-loaded; scripts and inline
+       handlers are not, so a sanitizer miss cannot execute code. -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: http:; connect-src 'self' https: http: ws: wss:; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'" />
   <title>Komi Go</title>
   <link rel="stylesheet" href="styles.css?v=0.5.13" />
 </head>

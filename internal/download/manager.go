@@ -109,12 +109,13 @@ type Job struct {
 type Emitter func(name string, payload any)
 
 type jobState struct {
-	mu     sync.Mutex
-	info   Job
-	req    Request
-	cancel context.CancelFunc
-	reason string // pause | cancel | shutdown
-	done   chan struct{}
+	mu      sync.Mutex
+	info    Job
+	req     Request
+	cancel  context.CancelFunc
+	reason  string // pause | cancel | shutdown
+	stalled bool   // the stall watchdog aborted this attempt
+	done    chan struct{}
 }
 
 // Manager owns the queue and the HTTP client.
@@ -321,7 +322,13 @@ func (m *Manager) run(ctx context.Context, st *jobState) {
 			return
 		}
 		if errors.Is(err, context.Canceled) || st.reasonOf() != "" {
-			m.updateStatus(st, ledger.StatusPaused, "已暂停，可继续下载")
+			// A watchdog abort resumes like a pause, but says why: "已取消" for a
+			// network that simply stopped sending bytes is misleading.
+			message := "已暂停，可继续下载"
+			if st.stalledFlag() {
+				message = "下载停滞超过 60 秒，已自动暂停；可继续续传"
+			}
+			m.updateStatus(st, ledger.StatusPaused, message)
 			return
 		}
 		m.updateStatus(st, ledger.StatusFailed, friendly(err))
@@ -388,6 +395,10 @@ func (m *Manager) fetch(ctx context.Context, st *jobState) (string, bool, string
 // DirectSourceLabel marks a job that came straight from the release host. Any
 // other Source value means a third-party mirror served the bytes.
 const DirectSourceLabel = "GitHub 直连"
+
+// stallAfter is how long the reader may go without receiving a byte before the
+// watchdog aborts the attempt. It is a variable only so tests can shorten it.
+var stallAfter = 60 * time.Second
 
 type source struct {
 	label string
@@ -674,14 +685,22 @@ func (m *Manager) fetchOne(ctx context.Context, st *jobState, req Request, rawUR
 	lastRead.Store(time.Now().UnixNano())
 	watchdog := make(chan struct{})
 	go func() {
-		ticker := time.NewTicker(2 * time.Second)
+		interval := 2 * time.Second
+		if stallAfter/2 < interval {
+			interval = stallAfter / 2
+		}
+		if interval < 50*time.Millisecond {
+			interval = 50 * time.Millisecond
+		}
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-watchdog:
 				return
 			case <-ticker.C:
-				if time.Since(time.Unix(0, lastRead.Load())) > 60*time.Second {
+				if time.Since(time.Unix(0, lastRead.Load())) > stallAfter {
+					st.setStalled(true)
 					cancel()
 					return
 				}
@@ -851,6 +870,7 @@ func (m *Manager) Resume(id string) (Job, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	st.cancel = cancel
 	st.done = make(chan struct{})
+	st.stalled = false
 	st.info.Status = ledger.StatusQueued
 	st.info.Error = ""
 	st.mu.Unlock()
@@ -886,6 +906,9 @@ func (m *Manager) Cancel(id string) error {
 	st.mu.Lock()
 	cancel := st.cancel
 	done := st.done
+	// Snapshot the destination while the lock is held: the worker may still be
+	// rewriting info.
+	destPath := st.info.DestPath
 	st.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -896,10 +919,12 @@ func (m *Manager) Cancel(id string) error {
 			}
 		}
 	}
-	part := st.info.DestPath + ".part"
+	part := destPath + ".part"
 	_ = os.Remove(part)
 	_ = os.Remove(part + ".meta")
-	_ = os.Remove(st.info.DestPath)
+	if destPath != "" {
+		_ = os.Remove(destPath)
+	}
 	if m.ledger != nil {
 		_ = m.ledger.DeleteTask(context.Background(), id)
 	}
@@ -1055,6 +1080,18 @@ func (st *jobState) cancelFunc() context.CancelFunc {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	return st.cancel
+}
+
+func (st *jobState) stalledFlag() bool {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.stalled
+}
+
+func (st *jobState) setStalled(v bool) {
+	st.mu.Lock()
+	st.stalled = v
+	st.mu.Unlock()
 }
 
 func (m *Manager) find(id string) *jobState {
