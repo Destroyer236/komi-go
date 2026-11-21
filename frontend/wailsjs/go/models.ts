@@ -690,6 +690,7 @@ export namespace main {
 	    size: number;
 	    digest: string;
 	    publishedAt: number;
+	    confirmUntrusted: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new DownloadRequest(source);
@@ -706,6 +707,7 @@ export namespace main {
 	        this.size = source["size"];
 	        this.digest = source["digest"];
 	        this.publishedAt = source["publishedAt"];
+	        this.confirmUntrusted = source["confirmUntrusted"];
 	    }
 	}
 	export class ExternalApp {

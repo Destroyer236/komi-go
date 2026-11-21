@@ -21,15 +21,31 @@ import (
 
 // DownloadRequest is what the frontend sends when the user clicks download.
 type DownloadRequest struct {
-	RepoKey     string `json:"repoKey"`
-	Tag         string `json:"tag"`
-	DisplayName string `json:"displayName"`
-	AssetID     int64  `json:"assetId"`
-	AssetName   string `json:"assetName"`
-	DownloadURL string `json:"downloadUrl"`
-	Size        int64  `json:"size"`
-	Digest      string `json:"digest"`
-	PublishedAt int64  `json:"publishedAt"`
+	RepoKey          string `json:"repoKey"`
+	Tag              string `json:"tag"`
+	DisplayName      string `json:"displayName"`
+	AssetID          int64  `json:"assetId"`
+	AssetName        string `json:"assetName"`
+	DownloadURL      string `json:"downloadUrl"`
+	Size             int64  `json:"size"`
+	Digest           string `json:"digest"`
+	PublishedAt      int64  `json:"publishedAt"`
+	ConfirmUntrusted bool   `json:"confirmUntrusted"`
+}
+
+// DownloadSource tells the UI whether an asset URL is served by a host we trust
+// before it asks the user to confirm an unusual origin.
+func (a *App) DownloadSource(rawURL, repoKey string) (map[string]any, error) {
+	host, _, _ := github.SplitRepoKey(repoKey)
+	trusted, assetHost, err := platform.ClassifyDownloadURL(rawURL, host)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"trusted":  trusted,
+		"host":     assetHost,
+		"repoHost": host,
+	}, nil
 }
 
 // StartDownload validates the request and enqueues it.
@@ -37,8 +53,13 @@ func (a *App) StartDownload(req DownloadRequest) (download.Job, error) {
 	if strings.TrimSpace(req.RepoKey) == "" || strings.TrimSpace(req.AssetName) == "" || strings.TrimSpace(req.DownloadURL) == "" {
 		return download.Job{}, errors.New("下载参数不完整")
 	}
-	if err := platform.ValidDownloadURL(req.DownloadURL); err != nil {
+	host, owner, repo := github.SplitRepoKey(req.RepoKey)
+	trusted, assetHost, err := platform.ClassifyDownloadURL(req.DownloadURL, host)
+	if err != nil {
 		return download.Job{}, err
+	}
+	if !trusted && !req.ConfirmUntrusted {
+		return download.Job{}, fmt.Errorf("下载地址来自未信任的主机 %s，确认来源后再继续", assetHost)
 	}
 	target := catalog.CurrentTarget()
 	asset := catalog.Asset{
@@ -54,7 +75,6 @@ func (a *App) StartDownload(req DownloadRequest) (download.Job, error) {
 		return download.Job{}, fmt.Errorf("这是校验文件或源码包，不能安装：%s", asset.Name)
 	}
 
-	host, owner, repo := github.SplitRepoKey(req.RepoKey)
 	appID := a.appIDFor(host, owner, repo, asset.Name)
 	dreq := download.Request{
 		RepoKey: req.RepoKey, Asset: asset,
@@ -206,13 +226,20 @@ func (a *App) DiskSpace() map[string]any {
 
 // InstallDownloaded extracts an archive or hands the artifact to Windows
 // Installer, then confirms the result through the Uninstall registry.
-func (a *App) InstallDownloaded(taskID string) (installer.Result, error) {
+// confirmMirror must be true when the file came from a third-party mirror and
+// the release carried no SHA-256: those bytes were rewritten in transit and
+// must not be installed silently.
+func (a *App) InstallDownloaded(taskID string, confirmMirror bool) (installer.Result, error) {
 	job, ok := a.jobByID(taskID)
 	if !ok {
 		return installer.Result{}, errors.New("下载任务不存在")
 	}
 	if job.Status != ledger.StatusDone {
 		return installer.Result{}, errors.New("文件尚未下载完成")
+	}
+	mirrored := job.Source != "" && job.Source != download.DirectSourceLabel
+	if mirrored && !job.Verified && !confirmMirror {
+		return installer.Result{}, fmt.Errorf("该文件经 %s 下载，且 Release 未提供 SHA-256，已阻止安装；确认来源后再继续", job.Source)
 	}
 	path := job.DestPath
 	if _, err := os.Stat(path); err != nil {

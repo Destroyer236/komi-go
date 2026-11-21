@@ -395,9 +395,10 @@ func (b *Backend) fetchOnce(ctx context.Context, path string, q url.Values, etag
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", backendUserAgent)
-	if tok := b.authToken(); tok != "" && !external {
-		req.Header.Set("X-GitHub-Token", tok)
-	}
+	// The user's GitHub token is never forwarded to the aggregation service:
+	// it is a third party, and a repo-scoped token would expose every private
+	// repository the user can read. The backend has its own pool for anonymous
+	// traffic, so this only costs rate headroom, not functionality.
 	if etag != "" {
 		req.Header.Set("If-None-Match", etag)
 	}

@@ -5,6 +5,8 @@ package selfupdate
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -31,6 +33,7 @@ type Info struct {
 	Name        string    `json:"name"`
 	URL         string    `json:"url"`
 	Size        int64     `json:"size"`
+	Digest      string    `json:"digest"`
 	Notes       string    `json:"notes"`
 	PublishedAt time.Time `json:"publishedAt"`
 }
@@ -60,7 +63,8 @@ func Check(ctx context.Context, c *github.Client, feedRepo, current string) (Inf
 		info := Info{
 			Current: current, Latest: rel.TagName, Tag: rel.TagName,
 			Name: asset.Name, URL: asset.DownloadURL, Size: asset.Size,
-			Notes: rel.Body, PublishedAt: rel.PublishedAt,
+			Digest: asset.Digest,
+			Notes:  rel.Body, PublishedAt: rel.PublishedAt,
 		}
 		info.Available = matcher.CompareVersion(rel.TagName, current) > 0
 		return info, nil
@@ -126,6 +130,11 @@ func Download(ctx context.Context, hc *http.Client, info Info, destDir string, o
 	if info.URL == "" {
 		return "", errors.New("没有可下载的自更新资产")
 	}
+	// Self-update executes whatever it downloads, so an unverifiable package is
+	// refused rather than installed on trust.
+	if info.Digest == "" {
+		return "", errors.New("Release 未提供 digest，已拒绝执行无法校验的自更新；请手动下载安装包")
+	}
 	if hc == nil {
 		hc = http.DefaultClient
 	}
@@ -187,16 +196,60 @@ func Download(ctx context.Context, hc *http.Client, info Info, destDir string, o
 	if err := f.Close(); err != nil {
 		return "", err
 	}
+	if info.Digest != "" {
+		if err := verifyFileDigest(tmp, info.Digest); err != nil {
+			os.Remove(tmp)
+			return "", err
+		}
+	}
 	if err := os.Rename(tmp, path); err != nil {
 		return "", err
 	}
 	return path, nil
 }
 
+// verifyFileDigest compares the SHA-256 of path with a GitHub
+// "sha256:<hex>" digest. An unverifiable digest is treated as a failure: a
+// self-update that installs bytes we cannot check is exactly the hole a
+// compromised feed repo would use.
+func verifyFileDigest(path, digest string) error {
+	sum, err := hashFile(path)
+	if err != nil {
+		return err
+	}
+	want := digest
+	if i := strings.Index(want, ":"); i > 0 {
+		want = want[i+1:]
+	}
+	if !strings.EqualFold(sum, want) {
+		return fmt.Errorf("自更新包校验失败：期望 %s，实际 %s", want, sum)
+	}
+	return nil
+}
+
+func hashFile(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
 // Launch writes a detached updater script and starts it. The caller should
 // quit immediately afterwards so the installer can replace the binary.
 func Launch(installerPath, appExe string) error {
-	script := filepath.Join(os.TempDir(), "komi-self-update.cmd")
+	// A predictable script path in %TEMP% is writable by any local process; use
+	// a random name so the updater cannot be pre-planted or swapped.
+	f, err := os.CreateTemp("", "komi-self-update-*.cmd")
+	if err != nil {
+		return err
+	}
+	script := f.Name()
 	var run string
 	switch strings.ToLower(filepath.Ext(installerPath)) {
 	case ".msi":
@@ -212,7 +265,13 @@ func Launch(installerPath, appExe string) error {
 		"timeout /t 2 /nobreak >nul\r\n" +
 		fmt.Sprintf("if exist \"%s\" start \"\" \"%s\"\r\n", appExe, appExe) +
 		"del \"%~f0\"\r\n"
-	if err := os.WriteFile(script, []byte(content), 0o644); err != nil {
+	if _, err := f.WriteString(content); err != nil {
+		f.Close()
+		os.Remove(script)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(script)
 		return err
 	}
 	cmd := exec.Command("cmd.exe", "/c", "start", "", script)

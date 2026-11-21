@@ -98,8 +98,12 @@ export function ImportLibraryFile() {
   return window['go']['main']['App']['ImportLibraryFile']();
 }
 
-export function InstallDownloaded(arg1) {
-  return window['go']['main']['App']['InstallDownloaded'](arg1);
+export function DownloadSource(arg1, arg2) {
+  return window['go']['main']['App']['DownloadSource'](arg1, arg2);
+}
+
+export function InstallDownloaded(arg1, arg2) {
+  return window['go']['main']['App']['InstallDownloaded'](arg1, arg2);
 }
 
 export function LibraryStats() {

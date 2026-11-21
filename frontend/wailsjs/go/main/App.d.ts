@@ -56,7 +56,8 @@ export function HideWindow():Promise<void>;
 
 export function ImportLibraryFile():Promise<main.ImportReport>;
 
-export function InstallDownloaded(arg1:string):Promise<installer.Result>;
+export function DownloadSource(arg1:string,arg2:string):Promise<Record<string, any>>;
+export function InstallDownloaded(arg1:string,arg2:boolean):Promise<installer.Result>;
 
 export function LibraryStats():Promise<Record<string, any>>;
 

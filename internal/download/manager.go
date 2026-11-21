@@ -385,13 +385,17 @@ func (m *Manager) fetch(ctx context.Context, st *jobState) (string, bool, string
 	return "", false, "", lastErr
 }
 
+// DirectSourceLabel marks a job that came straight from the release host. Any
+// other Source value means a third-party mirror served the bytes.
+const DirectSourceLabel = "GitHub 直连"
+
 type source struct {
 	label string
 	url   string
 }
 
 func (m *Manager) sources(original string) []source {
-	direct := source{label: "GitHub 直连", url: original}
+	direct := source{label: DirectSourceLabel, url: original}
 	m.mu.Lock()
 	mirrors := append([]Mirror(nil), m.mirrors...)
 	auto := m.auto
@@ -453,15 +457,6 @@ func (m *Manager) sources(original string) []source {
 		}(i)
 	}
 	wg.Wait()
-
-	if !auto {
-		// Manual mode keeps the configured order; direct stays first.
-		out := []source{direct}
-		for _, mir := range mirrors {
-			out = append(out, source{label: mir.Name, url: strings.ReplaceAll(mir.Template, "{url}", original)})
-		}
-		return out
-	}
 
 	// Auto mode: fastest reachable source first, dead sources dropped.
 	sort.SliceStable(candidates, func(i, j int) bool {

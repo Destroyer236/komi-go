@@ -1,6 +1,10 @@
 package selfupdate
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"komi-go/internal/catalog"
@@ -31,5 +35,28 @@ func TestPickInstallerPrefersMSIAndSkipsChecksum(t *testing.T) {
 	got := pickInstaller(assets, "amd64")
 	if got == nil || got.Name != "app-windows-amd64.msi" {
 		t.Fatalf("picked %#v", got)
+	}
+}
+
+func TestVerifyFileDigest(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "update.bin")
+	body := []byte("komi go update payload")
+	if err := os.WriteFile(path, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(body)
+	good := "sha256:" + hex.EncodeToString(sum[:])
+	if err := verifyFileDigest(path, good); err != nil {
+		t.Fatalf("valid digest rejected: %v", err)
+	}
+	if err := verifyFileDigest(path, "sha256:"+hex.EncodeToString(make([]byte, 32))); err == nil {
+		t.Fatal("mismatched digest accepted")
+	}
+}
+
+func TestDownloadRefusesMissingDigest(t *testing.T) {
+	_, err := Download(t.Context(), nil, Info{URL: "https://example.com/a.exe"}, t.TempDir(), nil)
+	if err == nil {
+		t.Fatal("download without digest should be refused")
 	}
 }

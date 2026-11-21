@@ -20,7 +20,7 @@ import (
 )
 
 var settingKeys = []string{
-	"theme", "update.auto", "update.interval", "update.prerelease",
+	"theme", "ui.accent", "update.auto", "update.interval", "update.prerelease",
 	"update.fallback_older", "update.filter", "network.proxy", "network.mirrors",
 	"network.mirrorSelected", "network.mirrors.seeded",
 	"ui.close_to_tray", "ui.reduce_motion", "system.autostart", "github.client_id",
@@ -37,6 +37,7 @@ func (a *App) GetSettings() (map[string]string, error) {
 	ctx := context.Background()
 	out := map[string]string{
 		"theme":                  "system",
+		"ui.accent":              "",
 		"update.auto":            "true",
 		"update.interval":        "12",
 		"update.prerelease":      "false",

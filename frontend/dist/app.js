@@ -158,7 +158,7 @@ function avatarHtml(item, cls = '') {
   const url = item && (item.avatarUrl || item.avatarURL);
   const letter = esc(((item && (item.owner || item.name || '?')) + '').slice(0, 1).toUpperCase());
   if (url && /^https:\/\//i.test(url)) {
-    return `<img class="avatar ${cls}" src="${esc(url)}" alt="" loading="lazy" onerror="this.style.display='none'">`;
+    return `<img class="avatar ${cls}" src="${esc(url)}" alt="" loading="lazy">`;
   }
   return `<div class="avatar ${cls}" aria-hidden="true">${letter}</div>`;
 }
@@ -362,21 +362,86 @@ function resolveMdUrl(raw, base) {
   return base.replace(/\/$/, '') + '/' + u.replace(/^\.\//, '');
 }
 
+/* README and release bodies are untrusted. Every tag is rebuilt from this
+   whitelist instead of being "cleaned" with attribute regexes: unquoted
+   handlers such as `<img src=x onerror=alert(1)>`, `<svg onload=alert(1)>`
+   or `<img/src=x/onerror="...">` all survive a regex strip, and the page
+   runs inside a WebView that exposes the bound App methods. */
+const MD_HTML_TAGS = {
+  a: ['href', 'title'], img: ['src', 'alt', 'title', 'width', 'height'],
+  br: [], hr: [], p: ['align'], div: ['align'], center: ['align'], span: [],
+  details: ['open'], summary: [],
+  strong: [], em: [], b: [], i: [], u: [], s: [], del: [], ins: [], code: [], kbd: [], mark: [],
+  pre: [], h1: ['align'], h2: ['align'], h3: ['align'], h4: ['align'], h5: ['align'], h6: ['align'],
+  ul: [], ol: ['start'], li: ['value'], blockquote: [],
+  table: ['align', 'border'], thead: [], tbody: [], tfoot: [], tr: [],
+  th: ['colspan', 'rowspan', 'align'], td: ['colspan', 'rowspan', 'align'], caption: [],
+  figure: [], figcaption: [], dl: [], dt: [], dd: [], sub: [], sup: [],
+};
+const MD_VOID_TAGS = new Set(['br', 'hr', 'img']);
+const MD_DROP_TAGS = new Set(['script', 'style', 'iframe', 'object', 'embed', 'template', 'textarea', 'title', 'noscript', 'svg', 'math']);
+const MD_ATTR_RE = /([a-zA-Z_:][a-zA-Z0-9_:.-]*)(?:\s*=\s*("[^"]*"|'[^']*'|[^\s"'=<>`]+))?/g;
+
+// parseRawTag rebuilds a single `<tag ...>` / `</tag>` token. Anything not on
+// the list (including inline handlers, style, srcdoc, srcset) is discarded.
+function parseRawTag(raw, base) {
+  const m = /^<\s*(\/?)\s*([a-zA-Z][a-zA-Z0-9-]*)([\s\S]*?)\/?\s*>$/.exec(String(raw).trim());
+  if (!m) return '';
+  const closing = m[1] === '/';
+  const tag = m[2].toLowerCase();
+  const allowed = MD_HTML_TAGS[tag];
+  if (!allowed) return '';
+  if (closing) return MD_VOID_TAGS.has(tag) ? '' : `</${tag}>`;
+  const attrs = [];
+  const seen = new Set();
+  const body = m[3] || '';
+  MD_ATTR_RE.lastIndex = 0;
+  let am;
+  while ((am = MD_ATTR_RE.exec(body)) !== null) {
+    if (am[0] === '') { MD_ATTR_RE.lastIndex += 1; continue; }
+    const name = am[1].toLowerCase();
+    if (seen.has(name) || !allowed.includes(name)) continue;
+    seen.add(name);
+    const value = am[2] == null ? '' : am[2].replace(/^["']|["']$/g, '');
+    if (name === 'href' || name === 'src') {
+      const u = resolveMdUrl(value, base);
+      if (!u) continue;
+      attrs.push(`${name}="${esc(name === 'src' ? mirrorGH(u) : u)}"`);
+      // Route every absolute link through OpenExternal so a README cannot
+      // navigate the WebView away from the app.
+      if (name === 'href' && /^https?:\/\//i.test(u)) attrs.push('data-external="1"');
+      continue;
+    }
+    if (!/^(align|title|alt|open)$/.test(name) && !/^\d{1,5}$/.test(value)) continue;
+    attrs.push(`${name}="${esc(value)}"`);
+  }
+  return `<${tag}${attrs.length ? ' ' + attrs.join(' ') : ''}>`;
+}
+
 function safeRawHtml(src, base) {
-  let s = String(src || '');
-  s = s.replace(/<!--[\s\S]*?-->/g, '');
-  s = s.replace(/<(script|style|iframe|object|embed|form|input|button|textarea|select|template)[\s\S]*?<\/\1>/gi, '');
-  s = s.replace(/<(script|style|iframe|object|embed|form|input|button|textarea|select|template)[^>]*>/gi, '');
-  s = s.replace(/\son[a-z]+=(?:"[^"]*"|'[^']*')/gi, '');
-  s = s.replace(/\sstyle=(?:"[^"]*"|'[^']*')/gi, '');
-  s = s.replace(/\ssrcset=(?:"[^"]*"|'[^']*')/gi, '');
-  s = s.replace(/\s(href|src)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi, (m, attr, dq, sq) => {
-    const raw = dq != null ? dq : sq;
-    const u = resolveMdUrl(raw, base);
-    if (!u) return '';
-    return ` ${attr}="${esc(attr === 'src' ? mirrorGH(u) : u)}"`;
-  });
-  return s;
+  const input = String(src || '');
+  const tokenRe = /<!--[\s\S]*?-->|<[a-zA-Z!/?][^>]*>/g;
+  let out = '';
+  let last = 0;
+  let m;
+  while ((m = tokenRe.exec(input)) !== null) {
+    out += input.slice(last, m.index);
+    const token = m[0];
+    last = tokenRe.lastIndex;
+    if (token.startsWith('<!')) continue; // comments and doctypes
+    const nameMatch = /^<\/?\s*([a-zA-Z][a-zA-Z0-9-]*)/.exec(token);
+    if (!nameMatch) { out += token; continue; }
+    const name = nameMatch[1].toLowerCase();
+    if (MD_DROP_TAGS.has(name) && !token.startsWith('</')) {
+      const closeRe = new RegExp(`</${name}\\s*>`, 'i');
+      const hit = closeRe.exec(input.slice(last));
+      last = hit ? last + hit.index + hit[0].length : input.length;
+      continue;
+    }
+    out += parseRawTag(token, base);
+  }
+  out += input.slice(last);
+  return out;
 }
 
 function mdTableCells(line) {
@@ -394,7 +459,7 @@ function isMdTableSeparator(line) {
 function inlineTableCell(raw, base) {
   const tags = [];
   let s = String(raw || '').replace(/<[^>]+>/g, (m) => {
-    const safe = safeRawHtml(m, base);
+    const safe = parseRawTag(m, base);
     if (!safe) return '';
     tags.push(safe);
     return `\u0002${tags.length - 1}\u0002`;
@@ -1848,9 +1913,25 @@ async function startDownload(index, assetIndex) {
     digest: asset.digest || '',
     publishedAt: Math.floor(new Date(rel.publishedAt).getTime() / 1000) || 0,
   };
+  let origin = null;
+  try { origin = await call('DownloadSource', asset.downloadUrl, req.repoKey); } catch (_) { origin = null; }
+  if (origin && origin.trusted === false) {
+    confirmDialog({
+      title: '下载来源未信任',
+      body: `这个资产由 ${origin.host || '未知主机'} 提供，既不是 ${origin.repoHost || '该仓库'}，也不是 GitHub 的下载主机。`,
+      confirm: '仍然下载',
+      danger: true,
+      onConfirm: () => enqueueDownload(req, true),
+    });
+    return;
+  }
+  await enqueueDownload(req, false);
+}
+
+async function enqueueDownload(req, confirmUntrusted) {
   busyOn();
   try {
-    await call('StartDownload', req);
+    await call('StartDownload', { ...req, confirmUntrusted: !!confirmUntrusted });
     await loadDownloads();
     toast('已加入下载队列', 'success');
     navigate('downloads');
@@ -1859,9 +1940,24 @@ async function startDownload(index, assetIndex) {
 }
 
 async function installDownload(id) {
+  const job = (S.downloads || []).find((j) => j.id === id) || {};
+  if (job.source && job.source !== 'GitHub 直连' && !job.verified) {
+    confirmDialog({
+      title: '安装经镜像下载的文件',
+      body: `这个文件由 ${job.source} 转发，Release 没有提供 SHA-256，无法确认字节没有被改动。`,
+      confirm: '仍然安装',
+      danger: true,
+      onConfirm: () => runInstall(id, true),
+    });
+    return;
+  }
+  await runInstall(id, false);
+}
+
+async function runInstall(id, confirmMirror) {
   busyOn();
   try {
-    const res = await call('InstallDownloaded', id);
+    const res = await call('InstallDownloaded', id, confirmMirror);
     await loadLibrary();
     if (res && res.pending) {
       toast(res.message || '安装器已启动，等待系统确认', 'success');
@@ -1873,7 +1969,21 @@ async function installDownload(id) {
       toast(res && res.unverified ? `${msg}（下载时没有可校验的摘要）` : msg, 'success');
     }
     render();
-  } catch (e) { notifyError(e); }
+  } catch (e) {
+    // The Go side is the real gate; if it refused a mirrored install, offer the
+    // same explicit confirmation instead of a dead-end error.
+    if (!confirmMirror && /已阻止安装/.test(String((e && e.message) || e))) {
+      confirmDialog({
+        title: '安装经镜像下载的文件',
+        body: String((e && e.message) || e),
+        confirm: '仍然安装',
+        danger: true,
+        onConfirm: () => runInstall(id, true),
+      });
+      return;
+    }
+    notifyError(e);
+  }
   finally { busyOff(); }
 }
 
@@ -2183,6 +2293,10 @@ function render() {
 function bindGlobal() {
   document.addEventListener('click', onGlobalClick);
   document.addEventListener('change', onGlobalChange);
+  document.addEventListener('error', (e) => {
+    const img = e.target;
+    if (img && img.tagName === 'IMG' && img.classList && img.classList.contains('avatar')) img.style.display = 'none';
+  }, true);
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       if (modalOpen) closeModal();

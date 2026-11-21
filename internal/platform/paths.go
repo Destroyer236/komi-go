@@ -172,6 +172,38 @@ func ValidDownloadURL(raw string) error {
 	return nil
 }
 
+// ClassifyDownloadURL keeps ValidDownloadURL as the hard gate, then decides
+// whether the host is one we are willing to download executables from without
+// asking. Known GitHub/Codeberg/Gitea hosts and the repository's own host
+// (self-hosted Forgejo) are trusted; everything else needs explicit consent.
+func ClassifyDownloadURL(rawURL, sourceHost string) (trusted bool, host string, err error) {
+	if err := ValidDownloadURL(rawURL); err != nil {
+		return false, "", err
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false, "", err
+	}
+	host = strings.ToLower(u.Hostname())
+	return trustedDownloadHost(host, sourceHost), host, nil
+}
+
+func trustedDownloadHost(host, sourceHost string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if allowedHosts[host] || strings.HasSuffix(host, ".githubusercontent.com") ||
+		strings.HasSuffix(host, ".codeberg.org") || strings.HasSuffix(host, ".gitea.com") {
+		return true
+	}
+	src := strings.ToLower(strings.TrimSpace(sourceHost))
+	if i := strings.Index(src, ":"); i > 0 {
+		src = src[:i]
+	}
+	if src == "" || src == "github.com" {
+		return false
+	}
+	return host == src
+}
+
 func isPrivateDownloadHost(host string) bool {
 	h := strings.ToLower(strings.TrimSuffix(host, "."))
 	if h == "localhost" || strings.HasSuffix(h, ".localhost") ||

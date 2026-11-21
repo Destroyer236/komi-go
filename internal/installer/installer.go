@@ -87,6 +87,10 @@ func installMSI(ctx context.Context, path string) (Result, error) {
 			return Result{}, errors.New("已取消安装（UAC 被拒绝）")
 		case msiNotInstalled:
 			return Result{}, errors.New("安装器报告产品未安装")
+		case 1603, 1925:
+			// Per-machine MSIs cannot install from an unelevated process; retry
+			// through UAC instead of surfacing a bare msiexec exit code.
+			return relaunchMSIElevated(path, logPath)
 		default:
 			return Result{}, fmt.Errorf("msiexec 退出码 %d（日志：%s）", result.ExitCode, logPath)
 		}
@@ -95,6 +99,18 @@ func installMSI(ctx context.Context, path string) (Result, error) {
 		return Result{}, errors.New("安装超时，安装器可能仍在运行")
 	}
 	return Result{}, err
+}
+
+func relaunchMSIElevated(path, logPath string) (Result, error) {
+	params := fmt.Sprintf(`/i "%s" /passive /norestart /L*v "%s"`, path, logPath)
+	code, err := shellExecute("runas", "msiexec.exe", params, filepath.Dir(path), swShowNormal)
+	if err == nil {
+		return Result{Pending: true, Message: "需要管理员权限，已弹出 UAC 确认；安装完成后会在应用库里自动确认"}, nil
+	}
+	if code == errorElevationRequired {
+		return Result{}, errors.New("安装器需要管理员权限，但提权被拒绝")
+	}
+	return Result{}, fmt.Errorf("无法以管理员权限启动安装器：%v", err)
 }
 
 func launchExe(path string) (Result, error) {
