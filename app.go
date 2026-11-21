@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -28,7 +29,7 @@ import (
 
 // Version is shown in the UI and copied into diagnostics. It is a variable so
 // the release build can inject it with -ldflags "-X main.Version=...".
-var Version = "0.3.0"
+var Version = "0.3.2"
 
 // App is the only struct bound to the frontend. Every exported method becomes
 // window.go.main.App.<Method> and must only take/return JSON-serialisable values.
@@ -260,6 +261,11 @@ func (a *App) applyMirrorSelection() {
 				break
 			}
 		}
+		if tpl == "" {
+			// The pinned preset was dropped from the list (dead upstream), so
+			// race the remaining mirrors instead of pinning nothing.
+			mode = "auto"
+		}
 	}
 	a.dl.SetSelected(tpl)
 	a.dl.SetAuto(mode == "auto")
@@ -286,17 +292,47 @@ func (a *App) applyMirrorSelection() {
 }
 
 // ensureMirrorDefaults seeds the built-in accelerator list exactly once. A
-// user who deliberately clears the list stays cleared because of the seeded flag.
+// user who deliberately cleared the list stays cleared because of the seeded
+// flag. Installations that never edited the shipped list are moved to the
+// current presets, so a mirror that died upstream does not stay pinned forever.
 func (a *App) ensureMirrorDefaults(store *ledger.Store) {
-	seeded, _ := store.GetSetting(context.Background(), "network.mirrors.seeded")
-	if seeded == "true" {
+	ctx := context.Background()
+	seeded, _ := store.GetSetting(ctx, "network.mirrors.seeded")
+	raw, _ := store.GetSetting(ctx, "network.mirrors")
+	if seeded != "true" {
+		if strings.TrimSpace(raw) == "" {
+			_ = store.SetSetting(ctx, "network.mirrors", presetMirrorJSON())
+		}
+		_ = store.SetSetting(ctx, "network.mirrors.seeded", "true")
 		return
 	}
-	raw, _ := store.GetSetting(context.Background(), "network.mirrors")
-	if strings.TrimSpace(raw) == "" {
-		_ = store.SetSetting(context.Background(), "network.mirrors", presetMirrorJSON())
+	if isLegacyPresetList(raw) {
+		_ = store.SetSetting(ctx, "network.mirrors", presetMirrorJSON())
 	}
-	_ = store.SetSetting(context.Background(), "network.mirrors.seeded", "true")
+}
+
+// isLegacyPresetList reports whether the stored JSON is exactly the set of
+// accelerators an earlier build shipped, i.e. the user never added or removed
+// an entry. A hand-edited list returns false and is left untouched.
+func isLegacyPresetList(raw string) bool {
+	var stored []download.Mirror
+	if err := json.Unmarshal([]byte(raw), &stored); err != nil || len(stored) == 0 {
+		return false
+	}
+	legacy := download.LegacyPresets()
+	if len(stored) != len(legacy) {
+		return false
+	}
+	have := make(map[string]bool, len(stored))
+	for _, m := range stored {
+		have[strings.TrimSpace(m.Template)] = true
+	}
+	for _, m := range legacy {
+		if !have[strings.TrimSpace(m.Template)] {
+			return false
+		}
+	}
+	return true
 }
 
 // ---------------------------------------------------------------------------
@@ -606,6 +642,17 @@ func (a *App) SetDownloadDir(dir string) error {
 	}
 	a.dl.SetDir(path)
 	return a.store.SetSetting(context.Background(), "download.dir", path)
+}
+
+// DiskFree reports the free bytes on the volume behind the *current* download
+// directory. The UI calls it after the folder changes, so the footer cannot
+// pair "D:\" with the free space of the old C: volume.
+func (a *App) DiskFree() (int64, error) {
+	free, err := download.DiskFree(a.dl.Dir())
+	if err != nil {
+		return 0, err
+	}
+	return int64(free), nil
 }
 
 // ChooseDownloadDir opens the native folder picker and applies the choice.

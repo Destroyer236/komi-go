@@ -40,6 +40,8 @@ export function Diagnostics():Promise<string>;
 
 export function Discover(arg1:string,arg2:number,arg3:boolean):Promise<Array<catalog.RepoInfo>>;
 
+export function DiskFree():Promise<number>;
+
 export function DiskSpace():Promise<Record<string, any>>;
 
 export function DownloadAndApplySelfUpdate():Promise<void>;

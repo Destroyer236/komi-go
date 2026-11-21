@@ -66,6 +66,10 @@ export function Discover(arg1, arg2, arg3) {
   return window['go']['main']['App']['Discover'](arg1, arg2, arg3);
 }
 
+export function DiskFree() {
+  return window['go']['main']['App']['DiskFree']();
+}
+
 export function DiskSpace() {
   return window['go']['main']['App']['DiskSpace']();
 }

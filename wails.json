@@ -14,7 +14,7 @@
   "info": {
     "companyName": "Komi Go",
     "productName": "Komi Go",
-    "productVersion": "0.3.0",
+    "productVersion": "0.3.2",
     "copyright": "Apache-2.0",
     "comments": "A Windows GitHub Release store built with Wails."
   }

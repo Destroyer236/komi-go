@@ -52,7 +52,29 @@ const MirrorProbeURL = "https://github.com/cli/cli/releases/download/v2.83.2/gh_
 
 // PresetMirrors are public GitHub release accelerators. They are only
 // transport proxies: the asset URL is embedded unchanged in the template.
+//
+// The list was re-measured from a mainland connection on 2026-11-21 against a
+// real release asset (gh_2.83.2_windows_amd64.zip, 4 MiB range): fastgit.cc
+// moved ~1.1 MB/s, monkeyray ~450 KB/s, monlor ~380 KB/s, ghproxy.net and
+// ghfast.top kept working, nxnow came and went, and gh.llkk.cc timed out on
+// every attempt, so it was dropped. Nothing here may be sent an Authorization
+// header — see fetchOne for the GitHub-only token rule.
 func PresetMirrors() []Mirror {
+	return []Mirror{
+		{Name: "FastGit", Template: "https://fastgit.cc/{url}"},
+		{Name: "MonkeyRay", Template: "https://ghproxy.monkeyray.net/{url}"},
+		{Name: "Monlor", Template: "https://gh.monlor.com/{url}"},
+		{Name: "GHProxy.net", Template: "https://ghproxy.net/{url}"},
+		{Name: "GHFast", Template: "https://ghfast.top/{url}"},
+		{Name: "NxNow", Template: "https://gh.nxnow.top/{url}"},
+		{Name: "GeekerTao", Template: "https://ghfile.geekertao.top/{url}"},
+	}
+}
+
+// LegacyPresets is the accelerator set builds up to 0.3.1 shipped. It exists
+// only so an installation that never edited its mirror list can be upgraded to
+// the current presets instead of being stuck with dead entries.
+func LegacyPresets() []Mirror {
 	return []Mirror{
 		{Name: "NxNow", Template: "https://gh.nxnow.top/{url}"},
 		{Name: "MonkeyRay", Template: "https://ghproxy.monkeyray.net/{url}", API: true},
@@ -98,6 +120,7 @@ type Job struct {
 	DestPath    string `json:"destPath"`
 	Total       int64  `json:"total"`
 	Done        int64  `json:"done"`
+	Speed       int64  `json:"speed"` // bytes per second, smoothed
 	Percent     int    `json:"percent"`
 	Version     string `json:"version"`
 	Verified    bool   `json:"verified"`
@@ -116,6 +139,11 @@ type jobState struct {
 	reason  string // pause | cancel | shutdown
 	stalled bool   // the stall watchdog aborted this attempt
 	done    chan struct{}
+
+	// Speed sampling for the bytes/second readout. Guarded by mu.
+	speedAt    time.Time
+	speedBytes int64
+	speedAvg   float64
 }
 
 // Manager owns the queue and the HTTP client.
@@ -850,6 +878,7 @@ func (m *Manager) sidecarDigest(rawURL string) (string, error) {
 // ---------------------------------------------------------------------------
 
 func (m *Manager) progress(st *jobState, done, total int64) {
+	now := time.Now()
 	st.mu.Lock()
 	st.info.Done = done
 	if total > 0 {
@@ -860,6 +889,7 @@ func (m *Manager) progress(st *jobState, done, total int64) {
 		}
 		st.info.Percent = p
 	}
+	st.info.Speed = st.sampleSpeed(now, done)
 	snapshot := st.info
 	st.mu.Unlock()
 	m.emit("download:progress", snapshot)
@@ -868,11 +898,61 @@ func (m *Manager) progress(st *jobState, done, total int64) {
 	}
 }
 
+// sampleSpeed turns the raw Done counter into a readable bytes/second value.
+// The counter jumps by whatever the transfer produced between two progress
+// events, so a plain delta/Δt is noisy; a short exponential average keeps the
+// number steady without lagging a whole second behind a stall. Callers must
+// hold st.mu.
+func (st *jobState) sampleSpeed(now time.Time, done int64) int64 {
+	switch {
+	case st.speedAt.IsZero():
+		// First sample only establishes the baseline, so a resumed job does not
+		// report the bytes it already had on disk as a burst.
+		st.speedAt, st.speedBytes = now, done
+		st.speedAvg = 0
+	case now.Sub(st.speedAt) >= 250*time.Millisecond:
+		dt := now.Sub(st.speedAt).Seconds()
+		inst := float64(done-st.speedBytes) / dt
+		if inst < 0 {
+			inst = 0
+		}
+		if st.speedAvg == 0 {
+			st.speedAvg = inst
+		} else {
+			st.speedAvg = st.speedAvg*0.6 + inst*0.4
+		}
+		st.speedAt, st.speedBytes = now, done
+	}
+	if st.speedAvg < 0 {
+		return 0
+	}
+	return int64(st.speedAvg)
+}
+
+// resetSpeed clears the meter when a job stops moving bytes.
+// Callers must hold st.mu.
+func (st *jobState) resetSpeed() {
+	st.info.Speed = 0
+	st.speedAt = time.Time{}
+	st.speedBytes = 0
+	st.speedAvg = 0
+}
+
 func (m *Manager) updateStatus(st *jobState, status, msg string) {
 	st.mu.Lock()
 	st.info.Status = status
 	st.info.Error = msg
 	st.info.CanResume = status == ledger.StatusPaused || status == ledger.StatusFailed
+	// Verifying, paused, failed and done are all "not moving bytes", so the
+	// speed readout must not keep showing the last burst.
+	if status != ledger.StatusDownloading {
+		st.resetSpeed()
+	} else {
+		// A fresh attempt starts from a new baseline.
+		st.speedAt = time.Time{}
+		st.speedBytes = 0
+		st.speedAvg = 0
+	}
 	snapshot := st.info
 	st.mu.Unlock()
 	m.emit("download:changed", snapshot)

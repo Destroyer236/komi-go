@@ -110,6 +110,11 @@ function fmtBytes(n) {
   return `${n.toFixed(n >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
+function fmtSpeed(n) {
+  const v = Number(n || 0);
+  return v > 0 ? `${fmtBytes(v)}/s` : '—';
+}
+
 function fmtDate(v) {
   if (!v) return '—';
   const d = new Date(v);
@@ -604,7 +609,7 @@ function navigate(route) {
   if (main) main.scrollTop = 0;
   render();
   if (route === 'settings') loadSettingsPage();
-  if (route === 'downloads') loadDownloads();
+  if (route === 'downloads') { loadDownloads(); refreshDiskFree(true); }
   if (route === 'library') loadLibrary();
 }
 
@@ -1310,7 +1315,7 @@ function downloadRow(j) {
     <div class="dl-status">
       <div class="progress-wrap">
         ${wavy(pct, paused ? 'paused' : failed ? 'error' : '')}
-        <div class="progress-meta"><span>${fmtBytes(j.done)} / ${fmtBytes(j.total)}</span><span>${pct}%</span></div>
+        <div class="progress-meta"><span>${fmtBytes(j.done)} / ${fmtBytes(j.total)}</span>${j.status === 'downloading' && j.speed ? `<span>${fmtSpeed(j.speed)}</span>` : ''}<span>${pct}%</span></div>
       </div>
       <div class="dl-actions">
         ${active ? `<button class="icon-btn" data-action="pause-download" data-id="${esc(j.id)}" data-tip="暂停" aria-label="暂停">${icon('pause')}</button>` : ''}
@@ -1324,6 +1329,34 @@ function downloadRow(j) {
     ${j.error ? `<div class="warning" style="margin-top:8px">${esc(j.error)}</div>` : ''}
     ${j.source ? `<div class="tiny muted" style="margin-top:6px">来源：${esc(j.source)}</div>` : ''}
   </div>`;
+}
+
+function downloadFootHtml() {
+  const dir = (S.auth && S.auth.downloadsDir) || '默认下载目录';
+  const free = (S.stats && S.stats.diskFree) || 0;
+  const speed = totalDownloadSpeed();
+  return `目录：${esc(dir)} · 磁盘可用：${fmtBytes(free)}${speed > 0 ? ` · 下载速度：${fmtSpeed(speed)}` : ''}`;
+}
+
+function totalDownloadSpeed() {
+  return (S.downloads || []).reduce((sum, j) => sum + (j.status === 'downloading' ? Number(j.speed || 0) : 0), 0);
+}
+
+// The free-space number must belong to the folder printed next to it: after the
+// download directory moves from C: to D: the old value would otherwise stay
+// until the next library reload.
+async function refreshDiskFree(force) {
+  const now = Date.now();
+  if (!force && S.diskFreeAt && now - S.diskFreeAt < 3000) return;
+  S.diskFreeAt = now;
+  try {
+    const free = Number(await call('DiskFree') || 0);
+    S.stats = Object.assign({}, S.stats || {}, { diskFree: free });
+    const el = $('#dlFoot');
+    if (el) el.innerHTML = downloadFootHtml();
+  } catch (e) {
+    console.error(e);
+  }
 }
 
 function renderDownloads() {
@@ -1345,10 +1378,11 @@ function renderDownloads() {
     <div class="section-title"><h2>已完成</h2><span class="badge outline">${finished.length}</span></div>
     ${finished.length ? `<div>${finished.map(downloadRow).join('')}</div>` : `<div class="note">下载完成后可以直接“安装”，安装器会请求 Windows 自己的权限确认。</div>`}
     <div class="spread" style="margin-top:16px">
-      <span class="tiny muted">目录：${esc((S.auth && S.auth.downloadsDir) || '默认下载目录')} · 磁盘可用：${fmtBytes((S.stats && S.stats.diskFree) || 0)}</span>
+      <span class="tiny muted" id="dlFoot">${downloadFootHtml()}</span>
       <span class="tiny muted">校验：只有 Release 提供 SHA-256 时才会标记“已校验”</span>
     </div>`;
   main.scrollTop = scroll;
+  refreshDiskFree(false);
 }
 
 /* ---------------------------------------------------------------- settings */
@@ -2501,6 +2535,7 @@ async function onGlobalClick(e) {
         if (!dir) break;
         S.auth = S.auth || {};
         S.auth.downloadsDir = dir;
+        await refreshDiskFree(true);
         toast('下载目录已更新', 'success');
         if (S.route === 'downloads') renderDownloads();
         if (S.route === 'settings') renderSettings();
@@ -2849,6 +2884,7 @@ function bindBackendEvents() {
     }
     loadDownloads().then(() => {
       updateRail();
+      refreshDiskFree(true);
       if (S.route === 'downloads') render();
     });
   });

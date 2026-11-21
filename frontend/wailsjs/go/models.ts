@@ -345,6 +345,7 @@ export namespace download {
 	    destPath: string;
 	    total: number;
 	    done: number;
+	    speed: number;
 	    percent: number;
 	    version: string;
 	    verified: boolean;
@@ -371,6 +372,7 @@ export namespace download {
 	        this.destPath = source["destPath"];
 	        this.total = source["total"];
 	        this.done = source["done"];
+	        this.speed = source["speed"];
 	        this.percent = source["percent"];
 	        this.version = source["version"];
 	        this.verified = source["verified"];
