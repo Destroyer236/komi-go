@@ -44,6 +44,8 @@ export function DiskSpace():Promise<Record<string, any>>;
 
 export function DownloadAndApplySelfUpdate():Promise<void>;
 
+export function DownloadSource(arg1:string,arg2:string):Promise<Record<string, any>>;
+
 export function ExportLibraryFile():Promise<string>;
 
 export function ExportObtainiumFile():Promise<string>;
@@ -56,7 +58,6 @@ export function HideWindow():Promise<void>;
 
 export function ImportLibraryFile():Promise<main.ImportReport>;
 
-export function DownloadSource(arg1:string,arg2:string):Promise<Record<string, any>>;
 export function InstallDownloaded(arg1:string,arg2:boolean):Promise<installer.Result>;
 
 export function LibraryStats():Promise<Record<string, any>>;

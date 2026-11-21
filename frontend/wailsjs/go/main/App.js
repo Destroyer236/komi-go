@@ -74,6 +74,10 @@ export function DownloadAndApplySelfUpdate() {
   return window['go']['main']['App']['DownloadAndApplySelfUpdate']();
 }
 
+export function DownloadSource(arg1, arg2) {
+  return window['go']['main']['App']['DownloadSource'](arg1, arg2);
+}
+
 export function ExportLibraryFile() {
   return window['go']['main']['App']['ExportLibraryFile']();
 }
@@ -96,10 +100,6 @@ export function HideWindow() {
 
 export function ImportLibraryFile() {
   return window['go']['main']['App']['ImportLibraryFile']();
-}
-
-export function DownloadSource(arg1, arg2) {
-  return window['go']['main']['App']['DownloadSource'](arg1, arg2);
 }
 
 export function InstallDownloaded(arg1, arg2) {

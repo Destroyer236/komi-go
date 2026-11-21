@@ -568,6 +568,7 @@ export namespace ledger {
 	    installedAssetId: number;
 	    installedAssetDigest: string;
 	    installedAssetUrl: string;
+	    installedAssetSize: number;
 	    installedReleaseId: number;
 	    installedReleaseTag: string;
 	    installedReleasePublishedAt: number;
@@ -629,6 +630,7 @@ export namespace ledger {
 	        this.installedAssetId = source["installedAssetId"];
 	        this.installedAssetDigest = source["installedAssetDigest"];
 	        this.installedAssetUrl = source["installedAssetUrl"];
+	        this.installedAssetSize = source["installedAssetSize"];
 	        this.installedReleaseId = source["installedReleaseId"];
 	        this.installedReleaseTag = source["installedReleaseTag"];
 	        this.installedReleasePublishedAt = source["installedReleasePublishedAt"];
@@ -843,6 +845,7 @@ export namespace selfupdate {
 	    name: string;
 	    url: string;
 	    size: number;
+	    digest: string;
 	    notes: string;
 	    // Go type: time
 	    publishedAt: any;
@@ -860,6 +863,7 @@ export namespace selfupdate {
 	        this.name = source["name"];
 	        this.url = source["url"];
 	        this.size = source["size"];
+	        this.digest = source["digest"];
 	        this.notes = source["notes"];
 	        this.publishedAt = this.convertValues(source["publishedAt"], null);
 	    }
